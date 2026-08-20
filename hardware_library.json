@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "insertProfiles": [
+    {
+      "id": "generic-m2-starter",
+      "displayName": "M2 Heat-Set Insert — approximate starter profile",
+      "threadSize": "M2",
+      "recipe": "countersink_hole_v1",
+      "holeDiameterMm": 3.0,
+      "holeDepthMm": 4.0,
+      "leadInDiameterMm": 3.4,
+      "leadInAngleDeg": 90.0,
+      "tipAngleDeg": 180.0,
+      "notes": "Approximate example values only, not a hardware specification. Replace them with the actual insert manufacturer's values before manufacturing."
+    },
+    {
+      "id": "generic-m3-user-example",
+      "displayName": "M3 Heat-Set Insert — 4.05 x 5.00 mm (starter)",
+      "threadSize": "M3",
+      "recipe": "countersink_hole_v1",
+      "holeDiameterMm": 4.05,
+      "holeDepthMm": 5.0,
+      "leadInDiameterMm": 4.6,
+      "leadInAngleDeg": 90.0,
+      "tipAngleDeg": 180.0,
+      "notes": "The hole diameter and depth are user-provided. Verify the starter lead-in values against the actual insert datasheet and print process."
+    },
+    {
+      "id": "generic-m4-starter",
+      "displayName": "M4 Heat-Set Insert — approximate starter profile",
+      "threadSize": "M4",
+      "recipe": "countersink_hole_v1",
+      "holeDiameterMm": 5.2,
+      "holeDepthMm": 6.5,
+      "leadInDiameterMm": 5.8,
+      "leadInAngleDeg": 90.0,
+      "tipAngleDeg": 180.0,
+      "notes": "Generic starter values only. Replace them with the actual insert manufacturer's recommendations before manufacturing."
+    }
+  ],
+  "screwProfiles": [
+    {
+      "id": "generic-m2-screw-starter",
+      "displayName": "M2 Screw — approximate starter profile",
+      "threadSize": "M2",
+      "recipe": "offset_head_seat_v1",
+      "clearanceDiameterMm": 2.4,
+      "buttonHeadClearanceDiameterMm": 4.0,
+      "capHeadClearanceDiameterMm": 4.5,
+      "notes": "Approximate example values only, not a screw standard. Verify every dimension before manufacturing."
+    },
+    {
+      "id": "generic-m3-socket-head-user-example",
+      "displayName": "M3 Socket Head Screw — 3.50 / 6.50 mm (starter)",
+      "threadSize": "M3",
+      "recipe": "offset_head_seat_v1",
+      "clearanceDiameterMm": 3.5,
+      "buttonHeadClearanceDiameterMm": 6.2,
+      "capHeadClearanceDiameterMm": 6.5,
+      "notes": "User-provided starter diameters. Verify clearance and head envelope against the selected screw and tolerance requirements."
+    },
+    {
+      "id": "generic-m4-socket-head-starter",
+      "displayName": "M4 Screw — approximate starter profile",
+      "threadSize": "M4",
+      "recipe": "offset_head_seat_v1",
+      "clearanceDiameterMm": 4.5,
+      "buttonHeadClearanceDiameterMm": 8.2,
+      "capHeadClearanceDiameterMm": 8.5,
+      "notes": "Generic starter values only. Verify them against the selected screw standard and tolerance requirements."
+    }
+  ]
+}

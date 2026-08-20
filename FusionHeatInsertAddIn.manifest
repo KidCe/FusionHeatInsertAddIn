@@ -1,0 +1,10 @@
+{
+  "autodeskProduct": "fusion360",
+  "type": "addin",
+  "id": "FusionHeatInsertAddIn",
+  "author": "Heat Insert Connections",
+  "description": "Create and update paired heat-insert and screw geometry from an editable hardware library.",
+  "version": "0.3.1",
+  "runOnStartup": true,
+  "supportedOS": "windows|mac"
+}
