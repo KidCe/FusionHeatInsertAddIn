@@ -32,6 +32,17 @@ The library includes M2 and M4 example profiles with intentionally approximate s
 
 Restart the add-in after editing the library so its dropdowns reload the data.
 
+### Lightweight profile editor
+
+Open `hardware_library_editor.html` in a Chromium-based browser. When browser permissions allow it, the editor automatically loads an adjacent `hardware_library.json` or reopens the previously authorized file. On the first `file://` launch, browser security can require choosing **Open Library** once. The self-contained editor supports:
+
+- creating, editing, duplicating, and deleting Insert and Screw profiles;
+- filtering profiles by thread size;
+- validating required fields, unique IDs, positive dimensions, and clearance relationships; and
+- saving through the browser's File System Access API or downloading a replacement `hardware_library.json` when direct file access is unavailable.
+
+Browser security requires an explicit file selection and save confirmation. Restart the Fusion add-in after saving profile changes.
+
 ## MVP constraints
 
 - Capture Design History must be enabled.

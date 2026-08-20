@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Heat Insert Hardware Library Editor</title>
+  <style>
+    :root { color-scheme: dark; --bg:#11151b; --panel:#1a2029; --panel2:#222b36; --line:#344252; --text:#eef3f8; --muted:#9eacbb; --accent:#55b6ff; --danger:#ff6b72; --ok:#63d69a; }
+    * { box-sizing: border-box; }
+    body { margin:0; min-height:100vh; background:linear-gradient(135deg,#0d1117,#17202a); color:var(--text); font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    button,input,select,textarea { font:inherit; }
+    button { border:1px solid var(--line); border-radius:7px; padding:8px 12px; color:var(--text); background:#263241; cursor:pointer; }
+    button:hover { border-color:var(--accent); }
+    button.primary { background:#176da5; border-color:#2e96d8; }
+    button.danger { color:#ffdadd; border-color:#814248; background:#49272c; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    header { display:flex; gap:16px; align-items:center; justify-content:space-between; padding:18px 22px; border-bottom:1px solid var(--line); background:rgba(16,21,28,.92); }
+    h1 { margin:0; font-size:20px; }
+    .subtitle,.hint { color:var(--muted); }
+    .toolbar { display:flex; gap:8px; flex-wrap:wrap; }
+    main { display:grid; grid-template-columns:330px minmax(420px,1fr); gap:14px; padding:14px; height:calc(100vh - 84px); }
+    .panel { min-height:0; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:rgba(26,32,41,.96); }
+    .sidebar { display:flex; flex-direction:column; }
+    .filters { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:12px; border-bottom:1px solid var(--line); }
+    select,input,textarea { width:100%; color:var(--text); background:#121820; border:1px solid var(--line); border-radius:6px; padding:8px 9px; }
+    input:focus,select:focus,textarea:focus { outline:2px solid rgba(85,182,255,.35); border-color:var(--accent); }
+    #profileList { list-style:none; padding:8px; margin:0; overflow:auto; }
+    #profileList li { margin:3px 0; }
+    .profile-button { width:100%; text-align:left; background:transparent; border-color:transparent; padding:10px; }
+    .profile-button.active { background:#273749; border-color:#46769a; }
+    .profile-button small { display:block; color:var(--muted); margin-top:2px; }
+    .editor { display:flex; flex-direction:column; }
+    .editor-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 16px; border-bottom:1px solid var(--line); }
+    .editor-head h2 { margin:0; font-size:17px; }
+    .editor-actions { display:flex; gap:8px; }
+    form { padding:16px; overflow:auto; }
+    .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:13px 16px; }
+    label { display:block; color:var(--muted); font-size:12px; font-weight:600; letter-spacing:.02em; }
+    label input,label select,label textarea { margin-top:5px; color:var(--text); font-weight:400; letter-spacing:0; }
+    .wide { grid-column:1/-1; }
+    textarea { min-height:88px; resize:vertical; }
+    .status { padding:9px 14px; border-top:1px solid var(--line); color:var(--muted); background:#141a22; }
+    .status.ok { color:var(--ok); }
+    .status.error { color:#ffadb2; }
+    .empty { padding:28px; text-align:center; color:var(--muted); }
+    .badge { display:inline-block; padding:2px 7px; margin-left:7px; border-radius:99px; background:#23384a; color:#aad9fa; font-size:11px; }
+    @media (max-width:850px) { main { grid-template-columns:1fr; height:auto; } .sidebar { min-height:320px; } .panel { overflow:visible; } form,#profileList { overflow:visible; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Hardware Library Editor</h1>
+      <div class="subtitle">Heat Insert Connections · <span id="fileName">No file opened</span></div>
+    </div>
+    <div class="toolbar">
+      <button id="openButton" class="primary">Open Library</button>
+      <button id="saveButton" disabled>Save</button>
+      <button id="saveAsButton" disabled>Save As / Download</button>
+    </div>
+  </header>
+  <main>
+    <section class="panel sidebar">
+      <div class="filters">
+        <select id="kindFilter" aria-label="Profile type"><option value="insert">Insert Profiles</option><option value="screw">Screw Profiles</option></select>
+        <select id="threadFilter" aria-label="Thread size"><option value="all">All thread sizes</option></select>
+      </div>
+      <ul id="profileList"><li class="empty">Open hardware_library.json to begin.</li></ul>
+    </section>
+    <section class="panel editor">
+      <div class="editor-head">
+        <h2 id="editorTitle">Profile</h2>
+        <div class="editor-actions">
+          <button id="newButton" disabled>New</button>
+          <button id="duplicateButton" disabled>Duplicate</button>
+          <button id="deleteButton" class="danger" disabled>Delete</button>
+        </div>
+      </div>
+      <form id="profileForm"><div class="empty">Select a profile to edit.</div></form>
+      <div id="status" class="status">No library loaded.</div>
+    </section>
+  </main>
+  <input id="fallbackOpen" type="file" accept="application/json,.json" hidden>
+  <script>
+    "use strict";
+    const state = { library:null, fileHandle:null, kind:"insert", selectedId:null, dirty:false };
+    const $ = id => document.getElementById(id);
+    const arrays = { insert:"insertProfiles", screw:"screwProfiles" };
+    const schemas = {
+      insert: [
+        ["id","Profile ID","text"],["displayName","Display Name","text"],["threadSize","Thread Size","text"],["recipe","Recipe","text"],
+        ["holeDiameterMm","Hole Diameter (mm)","number"],["holeDepthMm","Insert Depth (mm)","number"],["leadInDiameterMm","Lead-in Diameter (mm)","number"],
+        ["leadInAngleDeg","Lead-in Angle (deg)","number"],["tipAngleDeg","Tip Angle (deg)","number"],["notes","Notes","textarea"]
+      ],
+      screw: [
+        ["id","Profile ID","text"],["displayName","Display Name","text"],["threadSize","Thread Size","text"],["recipe","Recipe","text"],
+        ["clearanceDiameterMm","Screw Clearance Diameter (mm)","number"],["buttonHeadClearanceDiameterMm","Button Head Clearance Diameter (mm)","number"],
+        ["capHeadClearanceDiameterMm","Cap Head Clearance Diameter (mm)","number"],["notes","Notes","textarea"]
+      ]
+    };
+    function profiles(kind=state.kind) { return state.library ? state.library[arrays[kind]] : []; }
+    function selected() { return profiles().find(p => p.id === state.selectedId) || null; }
+    function setStatus(message,type="") { const el=$("status"); el.textContent=message; el.className="status "+type; }
+    function markDirty() { state.dirty=true; document.title="* Heat Insert Hardware Library Editor"; validate(); }
+    function refreshThreads() {
+      const current=$("threadFilter").value;
+      const sizes=[...new Set(profiles().map(p=>p.threadSize).filter(Boolean))].sort();
+      $("threadFilter").replaceChildren(new Option("All thread sizes","all"),...sizes.map(s=>new Option(s,s)));
+      $("threadFilter").value=sizes.includes(current)?current:"all";
+    }
+    function renderList() {
+      const list=$("profileList"); list.replaceChildren();
+      if(!state.library){ list.append(empty("Open hardware_library.json to begin.")); return; }
+      const filter=$("threadFilter").value;
+      const visible=profiles().filter(p=>filter==="all"||p.threadSize===filter);
+      if(!visible.length){ list.append(empty("No profiles match this filter.")); return; }
+      visible.forEach(profile=>{
+        const li=document.createElement("li"), button=document.createElement("button");
+        button.type="button"; button.className="profile-button"+(profile.id===state.selectedId?" active":"");
+        const name=document.createElement("span"); name.textContent=profile.displayName||profile.id||"Unnamed profile";
+        const meta=document.createElement("small"); meta.textContent=`${profile.threadSize||"No size"} · ${profile.id||"No ID"}`;
+        button.append(name,meta); button.addEventListener("click",()=>{state.selectedId=profile.id; render();}); li.append(button); list.append(li);
+      });
+    }
+    function empty(text){ const li=document.createElement("li"); li.className="empty"; li.textContent=text; return li; }
+    function renderForm(){
+      const form=$("profileForm"), profile=selected(); form.replaceChildren();
+      $("duplicateButton").disabled=!profile; $("deleteButton").disabled=!profile;
+      if(!profile){ form.append(empty("Select a profile to edit.")); $("editorTitle").textContent="Profile"; return; }
+      $("editorTitle").textContent=profile.displayName||profile.id;
+      const grid=document.createElement("div"); grid.className="grid";
+      schemas[state.kind].forEach(([key,labelText,type])=>{
+        const label=document.createElement("label"); label.textContent=labelText; if(type==="textarea") label.className="wide";
+        const input=type==="textarea"?document.createElement("textarea"):document.createElement("input");
+        if(type==="number"){input.type="number";input.step="any";input.min="0";} else if(type!=="textarea") input.type="text";
+        input.value=profile[key]??""; input.dataset.key=key;
+        input.addEventListener("input",()=>{
+          const oldId=profile.id; profile[key]=type==="number"?(input.value===""?null:Number(input.value)):input.value;
+          if(key==="id") state.selectedId=profile.id;
+          markDirty(); refreshThreads(); renderList(); if(key==="displayName") $("editorTitle").textContent=profile.displayName||profile.id;
+        });
+        label.append(input); grid.append(label);
+      }); form.append(grid);
+    }
+    function render(){ refreshThreads(); renderList(); renderForm(); const loaded=!!state.library; $("newButton").disabled=!loaded; $("saveAsButton").disabled=!loaded; $("saveButton").disabled=!loaded; validate(); }
+    function validate(){
+      if(!state.library){setStatus("No library loaded.");return false;}
+      const errors=[];
+      if(state.library.schemaVersion!==1) errors.push("schemaVersion must be 1.");
+      for(const kind of ["insert","screw"]){
+        const ids=new Set();
+        state.library[arrays[kind]].forEach((p,i)=>{
+          const where=`${arrays[kind]}[${i}]`;
+          for(const key of ["id","displayName","threadSize","recipe"]) if(typeof p[key]!=="string"||!p[key].trim()) errors.push(`${where}.${key} is required.`);
+          if(ids.has(p.id)) errors.push(`Duplicate ${kind} profile ID: ${p.id}.`); ids.add(p.id);
+          for(const [key,,type] of schemas[kind]) if(type==="number"&&(!(Number.isFinite(p[key]))||p[key]<=0)) errors.push(`${where}.${key} must be greater than zero.`);
+          if(kind==="insert"&&Number.isFinite(p.leadInDiameterMm)&&Number.isFinite(p.holeDiameterMm)&&p.leadInDiameterMm<=p.holeDiameterMm) errors.push(`${where}.leadInDiameterMm must be larger than holeDiameterMm.`);
+          if(kind==="screw"&&Number.isFinite(p.clearanceDiameterMm)) for(const key of ["buttonHeadClearanceDiameterMm","capHeadClearanceDiameterMm"]) if(Number.isFinite(p[key])&&p[key]<=p.clearanceDiameterMm) errors.push(`${where}.${key} must be larger than clearanceDiameterMm.`);
+        });
+      }
+      if(errors.length){setStatus(errors[0]+(errors.length>1?` (+${errors.length-1} more)`:""),"error");return false;}
+      setStatus(state.dirty?"Valid library · unsaved changes":"Valid library · no unsaved changes","ok"); return true;
+    }
+    function normalizeLibrary(data){
+      if(!data||typeof data!=="object"||Array.isArray(data)) throw new Error("The file must contain a JSON object.");
+      if(!Array.isArray(data.insertProfiles)||!Array.isArray(data.screwProfiles)) throw new Error("The file must contain insertProfiles and screwProfiles arrays.");
+      return structuredClone(data);
+    }
+    function handleDatabase(){
+      return new Promise((resolve,reject)=>{
+        if(!window.indexedDB){reject(new Error("IndexedDB is unavailable."));return;}
+        const request=indexedDB.open("heat-insert-library-editor",1);
+        request.onupgradeneeded=()=>request.result.createObjectStore("handles");
+        request.onsuccess=()=>resolve(request.result); request.onerror=()=>reject(request.error);
+      });
+    }
+    async function rememberHandle(handle){
+      if(!handle)return;
+      try{const db=await handleDatabase();const tx=db.transaction("handles","readwrite");tx.objectStore("handles").put(handle,"hardware-library");await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});db.close();}catch{}
+    }
+    async function recalledHandle(){
+      try{const db=await handleDatabase();const tx=db.transaction("handles","readonly");const request=tx.objectStore("handles").get("hardware-library");const handle=await new Promise((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});db.close();return handle||null;}catch{return null;}
+    }
+    async function loadFile(file,handle=null){
+      try{ state.library=normalizeLibrary(JSON.parse(await file.text())); state.fileHandle=handle; await rememberHandle(handle); state.kind="insert"; state.selectedId=state.library.insertProfiles[0]?.id||null; state.dirty=false; $("kindFilter").value="insert"; $("fileName").textContent=file.name; document.title="Heat Insert Hardware Library Editor"; render(); }
+      catch(error){setStatus(`Could not open library: ${error.message}`,"error");}
+    }
+    async function openLibrary(){
+      if(state.dirty&&!confirm("Discard unsaved changes and open another library?")) return;
+      if(window.showOpenFilePicker){
+        try{const [handle]=await showOpenFilePicker({types:[{description:"JSON hardware library",accept:{"application/json":[".json"]}}],multiple:false});await loadFile(await handle.getFile(),handle);}catch(error){if(error.name!=="AbortError")setStatus(`Could not open library: ${error.message}`,"error");}
+      } else $("fallbackOpen").click();
+    }
+    async function autoOpenLibrary(){
+      const handle=await recalledHandle();
+      if(handle){
+        try{if(await handle.queryPermission({mode:"readwrite"})==="granted"){await loadFile(await handle.getFile(),handle);setStatus("Previously authorized library loaded automatically.","ok");return;}}catch{}
+      }
+      try{
+        const response=await fetch(new URL("hardware_library.json",location.href),{cache:"no-store"});
+        if(!response.ok)throw new Error(`HTTP ${response.status}`);
+        const file=new File([await response.blob()],"hardware_library.json",{type:"application/json"});
+        await loadFile(file,null); setStatus("Adjacent hardware_library.json loaded automatically. Use Save As / Download if direct saving is unavailable.","ok");
+      }catch{
+        setStatus(location.protocol==="file:"?"Browser security requires Open Library once. Future visits can reuse the authorized file automatically.":"Could not load the adjacent hardware_library.json. Use Open Library.","");
+      }
+    }
+    function jsonText(){return JSON.stringify(state.library,null,2)+"\n";}
+    async function save(){
+      if(!validate()) return;
+      if(state.fileHandle){try{const writable=await state.fileHandle.createWritable();await writable.write(jsonText());await writable.close();state.dirty=false;document.title="Heat Insert Hardware Library Editor";setStatus("Library saved.","ok");return;}catch(error){setStatus(`Direct save failed: ${error.message}`,"error");return;}}
+      await saveAs();
+    }
+    async function saveAs(){
+      if(!validate()) return;
+      if(window.showSaveFilePicker){
+        try{const handle=await showSaveFilePicker({suggestedName:"hardware_library.json",types:[{description:"JSON hardware library",accept:{"application/json":[".json"]}}]});const writable=await handle.createWritable();await writable.write(jsonText());await writable.close();state.fileHandle=handle;await rememberHandle(handle);state.dirty=false;$("fileName").textContent=(await handle.getFile()).name;document.title="Heat Insert Hardware Library Editor";setStatus("Library saved.","ok");return;}catch(error){if(error.name!=="AbortError")setStatus(`Save failed: ${error.message}`,"error");return;}
+      }
+      const blob=new Blob([jsonText()],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download="hardware_library.json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);state.dirty=false;document.title="Heat Insert Hardware Library Editor";setStatus("Library downloaded. Replace the add-in copy if required.","ok");
+    }
+    function uniqueId(base){const ids=new Set(profiles().map(p=>p.id));let id=base||`new-${state.kind}-profile`,n=2;while(ids.has(id))id=`${base}-${n++}`;return id;}
+    function newProfile(){
+      const thread=$("threadFilter").value==="all"?"M3":$("threadFilter").value;
+      const p=state.kind==="insert"?{id:uniqueId("new-insert-profile"),displayName:"New Insert Profile",threadSize:thread,recipe:"countersink_hole_v1",holeDiameterMm:4,holeDepthMm:5,leadInDiameterMm:4.5,leadInAngleDeg:90,tipAngleDeg:180,notes:"Verify all dimensions before manufacturing."}:{id:uniqueId("new-screw-profile"),displayName:"New Screw Profile",threadSize:thread,recipe:"offset_head_seat_v1",clearanceDiameterMm:3.5,buttonHeadClearanceDiameterMm:6.2,capHeadClearanceDiameterMm:6.5,notes:"Verify all dimensions before manufacturing."};
+      profiles().push(p);state.selectedId=p.id;markDirty();render();
+    }
+    function duplicateProfile(){const source=selected();if(!source)return;const copy=structuredClone(source);copy.id=uniqueId(`${source.id}-copy`);copy.displayName=`${source.displayName} (Copy)`;profiles().push(copy);state.selectedId=copy.id;markDirty();render();}
+    function deleteProfile(){const p=selected();if(!p||!confirm(`Delete "${p.displayName}"?`))return;const list=profiles(),index=list.indexOf(p);list.splice(index,1);state.selectedId=list[Math.min(index,list.length-1)]?.id||null;markDirty();render();}
+    $("openButton").addEventListener("click",openLibrary); $("saveButton").addEventListener("click",save); $("saveAsButton").addEventListener("click",saveAs);
+    $("newButton").addEventListener("click",newProfile); $("duplicateButton").addEventListener("click",duplicateProfile); $("deleteButton").addEventListener("click",deleteProfile);
+    $("kindFilter").addEventListener("change",()=>{state.kind=$("kindFilter").value;state.selectedId=profiles()[0]?.id||null;render();});
+    $("threadFilter").addEventListener("change",()=>{const visible=profiles().filter(p=>$("threadFilter").value==="all"||p.threadSize===$("threadFilter").value);if(!visible.some(p=>p.id===state.selectedId))state.selectedId=visible[0]?.id||null;renderList();renderForm();});
+    $("fallbackOpen").addEventListener("change",event=>{const file=event.target.files[0];if(file)loadFile(file);event.target.value="";});
+    window.addEventListener("beforeunload",event=>{if(state.dirty){event.preventDefault();event.returnValue="";}});
+    autoOpenLibrary();
+  </script>
+</body>
+</html>
