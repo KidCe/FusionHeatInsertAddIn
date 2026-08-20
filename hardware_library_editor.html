@@ -206,9 +206,13 @@
       }
     }
     function jsonText(){return JSON.stringify(state.library,null,2)+"\n";}
+    function isLocalEditorServer(){return location.protocol==="http:"&&location.hostname==="127.0.0.1";}
     async function save(){
       if(!validate()) return;
       if(state.fileHandle){try{const writable=await state.fileHandle.createWritable();await writable.write(jsonText());await writable.close();state.dirty=false;document.title="Heat Insert Hardware Library Editor";setStatus("Library saved.","ok");return;}catch(error){setStatus(`Direct save failed: ${error.message}`,"error");return;}}
+      if(isLocalEditorServer()){
+        try{const response=await fetch("/hardware_library.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:jsonText()});const result=await response.json();if(!response.ok||!result.saved)throw new Error(result.error||`HTTP ${response.status}`);state.dirty=false;document.title="Heat Insert Hardware Library Editor";setStatus("Library saved directly to hardware_library.json.","ok");return;}catch(error){setStatus(`Direct save failed: ${error.message}`,"error");return;}
+      }
       await saveAs();
     }
     async function saveAs(){

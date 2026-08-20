@@ -43,6 +43,8 @@ Open `hardware_library_editor.html` in a Chromium-based browser. When browser pe
 
 Browser security requires an explicit file selection and save confirmation. Restart the Fusion add-in after saving profile changes.
 
+For the simplest Windows workflow, double-click `Open Hardware Library Editor.cmd`. It opens a visible, loopback-only local server window and launches the editor with the adjacent library already loaded. **Save** writes the validated JSON directly back to the same folder. Close the server window to stop it. No administrator rights or installation are required when the Windows Python launcher is available.
+
 ## MVP constraints
 
 - Capture Design History must be enabled.
