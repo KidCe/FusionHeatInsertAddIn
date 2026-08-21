@@ -27,7 +27,7 @@ For Create New, select:
 - **Screw Entry Face**: the face where the screw leaves the screw-side body and continues toward the insert body; and
 - **Locations**: one or more sketch points defining the connection axes.
 
-For Edit Existing, select the managed Connection Set and change its Thread Size, Insert Profile, Screw Profile, Head Shape, Head Seat Distance, or Additional Insert Clearance Depth. The original faces and points are reused.
+For Edit Existing, select the managed Connection Set and change its Thread Size, Insert Profile, Insert Hole Diameter Tolerance, Screw Profile, Head Shape, Head Seat Distance, or Additional Insert Clearance Depth. The original faces and points are reused.
 
 **Preview** is available for both actions and is off by default. During preview, the two affected bodies use a temporary 35% opacity override so internal cuts are easier to inspect. The original opacity is restored when preview is disabled or the dialog closes. Orphaned metadata is excluded from Edit Existing when its timeline group or managed features no longer exist.
 
@@ -35,9 +35,11 @@ For Edit Existing, select the managed Connection Set and change its Thread Size,
 
 `hardware_library.json` contains separate insert and screw profiles. Thread Size filters both profile dropdowns, so mismatched profiles cannot be selected. Each screw profile supplies distinct Button Head and Cap Head clearance diameters.
 
+**Insert Hole Diameter Tolerance** adds a positive diameter offset to the selected insert profile. The available values are 0.00, 0.05, 0.10, 0.15 and 0.20 mm; for example, a 4.00 mm M3 profile becomes 4.05 or 4.10 mm. This is a simple hardware-fit allowance, not slicer compensation, and it affects only the cylindrical insert hole.
+
 **Add Insert Clearance** is off by default. When enabled, **Additional Insert Clearance Depth** extends the insert-side blind hole beyond the nominal insert length. When disabled, the profile depth is used unchanged.
 
-The library includes M2 and M4 example profiles with intentionally approximate starter values, plus the initial M3 example. These are not standards or manufacturing recommendations. Verify every value against the actual hardware datasheet, screw standard, printer/material process, and required tolerances.
+The library includes RUTHEX M2, M3, M4 and M6 insert profiles (including Short and VORON variants where applicable), plus researched M2/M3/M4/M6 Button Head and Cap Head screw profiles. The complete RUTHEX metric catalogue and screw-dimension sources are documented in [`RESEARCH_hardware_dimensions.md`](RESEARCH_hardware_dimensions.md). Generic example profiles remain available for comparison but are intentionally approximate. Verify every value against the actual hardware datasheet, screw standard, printer/material process, and required tolerances.
 
 Restart the add-in after editing the library so its dropdowns reload the data.
 

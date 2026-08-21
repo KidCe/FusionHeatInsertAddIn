@@ -25,11 +25,11 @@ class ConnectionDataTests(unittest.TestCase):
 
     def test_parameter_specs_are_namespaced_and_dimensioned(self):
         specs = parameter_specs(
-            "1a-2b", self.insert, self.screw, 3.25, "button", 2.0
+            "1a-2b", self.insert, self.screw, 3.25, "button", 2.0, 0.1
         )
 
         self.assertEqual(parameter_prefix("1a-2b"), "HIC_C_1a_2b")
-        self.assertEqual(specs["insertHoleDiameter"]["expression"], "4.05 mm")
+        self.assertEqual(specs["insertHoleDiameter"]["expression"], "4.15 mm")
         self.assertEqual(specs["screwClearanceDiameter"]["expression"], "3.5 mm")
         self.assertEqual(specs["headSeatOffset"]["expression"], "3.25 mm")
         self.assertEqual(specs["headClearanceDiameter"]["expression"], "6.2 mm")
@@ -43,6 +43,10 @@ class ConnectionDataTests(unittest.TestCase):
     def test_negative_additional_insert_clearance_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "cannot be negative"):
             parameter_specs("abc", self.insert, self.screw, 3.0, "cap", -0.1)
+
+    def test_negative_hole_tolerance_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "tolerance cannot be negative"):
+            parameter_specs("abc", self.insert, self.screw, 3.0, "cap", 0.0, -0.05)
 
     def test_record_round_trip_and_update(self):
         specs = parameter_specs("abc123", self.insert, self.screw, 3.0)
@@ -63,10 +67,12 @@ class ConnectionDataTests(unittest.TestCase):
             screw_exit_face_token="screw-face",
             source_point_tokens=["p1", "p2", "p3"],
             timeline_group_name="HIC abc123 — M3 — 3 locations",
+            hole_diameter_tolerance_mm=0.05,
         )
 
         decoded = decode_record(encode_record(record))
         self.assertEqual(decoded["locationCount"], 3)
+        self.assertEqual(decoded["holeDiameterToleranceMm"], 0.05)
         self.assertEqual(record_label(decoded), "HIC abc123 — M3 — 3 locations")
 
         m4_insert = self.library.insert("generic-m4-starter")
@@ -80,11 +86,13 @@ class ConnectionDataTests(unittest.TestCase):
             head_shape="button",
             insert_clearance_depth_mm=2.5,
             timeline_group_name="HIC abc123 — M4 — 3 locations",
+            hole_diameter_tolerance_mm=0.1,
         )
         self.assertEqual(updated["threadSize"], "M4")
         self.assertEqual(updated["headSeatOffsetMm"], 4.0)
         self.assertEqual(updated["headShape"], "button")
         self.assertEqual(updated["insertClearanceDepthMm"], 2.5)
+        self.assertEqual(updated["holeDiameterToleranceMm"], 0.1)
         self.assertEqual(decoded["threadSize"], "M3")
 
 

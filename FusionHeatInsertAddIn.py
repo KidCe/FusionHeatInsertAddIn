@@ -49,7 +49,7 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.4.0"
+ADDIN_VERSION = "0.5.0"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
 LEGACY_COMMAND_IDS = (
@@ -62,6 +62,13 @@ RECORD_PREFIX = "ConnectionSet."
 OWNER_ATTRIBUTE = "ConnectionSetId"
 ROLE_ATTRIBUTE = "ConnectionSetRole"
 HEAD_SHAPES = {"Button Head": "button", "Cap Head": "cap"}
+HOLE_DIAMETER_TOLERANCES = {
+    "Profile Value (+0.00 mm)": 0.0,
+    "+0.05 mm": 0.05,
+    "+0.10 mm": 0.10,
+    "+0.15 mm": 0.15,
+    "+0.20 mm": 0.20,
+}
 AUTO_INSERT_FACE_MAX_GAP_MM = 0.2
 AUTO_INSERT_FACE_MAX_GAP_CM = AUTO_INSERT_FACE_MAX_GAP_MM / 10.0
 GEOMETRY_TOLERANCE_CM = 1e-5
@@ -624,6 +631,24 @@ def _insert_clearance_depth_mm(inputs) -> float:
     return value_input.value * 10.0
 
 
+def _selected_hole_diameter_tolerance_mm(inputs) -> float:
+    dropdown = adsk.core.DropDownCommandInput.cast(
+        inputs.itemById("hole_diameter_tolerance")
+    )
+    item = dropdown.selectedItem if dropdown else None
+    if not item or item.name not in HOLE_DIAMETER_TOLERANCES:
+        raise ConnectionSetError("Select an Insert Hole Diameter Tolerance.")
+    return HOLE_DIAMETER_TOLERANCES[item.name]
+
+
+def _select_hole_diameter_tolerance(dropdown, tolerance_mm: float) -> None:
+    closest = min(
+        HOLE_DIAMETER_TOLERANCES.items(),
+        key=lambda item: abs(item[1] - tolerance_mm),
+    )[0]
+    _select_dropdown_name(dropdown, closest)
+
+
 def _selected_head_shape(inputs) -> str:
     dropdown = adsk.core.DropDownCommandInput.cast(inputs.itemById("head_shape"))
     item = dropdown.selectedItem if dropdown else None
@@ -658,6 +683,7 @@ def _create_connection_set(inputs) -> Dict[str, Any]:
     screw = library.screw(_selected_dropdown_id(screw_dropdown, library.screws))
     head_seat_offset_mm = _seat_offset_mm(inputs)
     insert_clearance_depth_mm = _insert_clearance_depth_mm(inputs)
+    hole_diameter_tolerance_mm = _selected_hole_diameter_tolerance_mm(inputs)
     head_shape = _selected_head_shape(inputs)
     if insert.thread_size != screw.thread_size:
         raise ConnectionSetError("Insert and screw thread sizes must match in the MVP.")
@@ -675,6 +701,7 @@ def _create_connection_set(inputs) -> Dict[str, Any]:
         head_seat_offset_mm,
         head_shape,
         insert_clearance_depth_mm,
+        hole_diameter_tolerance_mm,
     )
     start_index = design.timeline.count
     created: List[Any] = []
@@ -760,6 +787,7 @@ def _create_connection_set(inputs) -> Dict[str, Any]:
             head_seat_offset_mm=head_seat_offset_mm,
             head_shape=head_shape,
             insert_clearance_depth_mm=insert_clearance_depth_mm,
+            hole_diameter_tolerance_mm=hole_diameter_tolerance_mm,
             location_count=len(source_points),
             parameter_names=parameter_names,
             feature_tokens=feature_tokens,
@@ -785,11 +813,12 @@ def _create_connection_set(inputs) -> Dict[str, Any]:
 
 def _parameter_expressions(
     record: Dict[str, Any], insert, screw, seat_offset_mm: float, head_shape: str,
-    insert_clearance_depth_mm: float,
+    insert_clearance_depth_mm: float, hole_diameter_tolerance_mm: float = 0.0,
 ) -> Dict[str, str]:
     specs = parameter_specs(
         record["id"], insert, screw, seat_offset_mm, head_shape,
         insert_clearance_depth_mm,
+        hole_diameter_tolerance_mm,
     )
     return {key: spec["expression"] for key, spec in specs.items()}
 
@@ -807,7 +836,7 @@ def _timeline_group_by_name(
 
 def _update_connection_set(
     record: Dict[str, Any], insert, screw, seat_offset_mm: float, head_shape: str,
-    insert_clearance_depth_mm: float,
+    insert_clearance_depth_mm: float, hole_diameter_tolerance_mm: float = 0.0,
 ) -> Dict[str, Any]:
     design = _active_design()
     if insert.thread_size != screw.thread_size:
@@ -816,6 +845,7 @@ def _update_connection_set(
     expressions = _parameter_expressions(
         record, insert, screw, seat_offset_mm, head_shape,
         insert_clearance_depth_mm,
+        hole_diameter_tolerance_mm,
     )
     parameters: Dict[str, Any] = {}
     old_expressions: Dict[str, str] = {}
@@ -877,6 +907,7 @@ def _update_connection_set(
         head_seat_offset_mm=seat_offset_mm,
         head_shape=head_shape,
         insert_clearance_depth_mm=insert_clearance_depth_mm,
+        hole_diameter_tolerance_mm=hole_diameter_tolerance_mm,
         timeline_group_name=new_group_name,
     )
     _save_record(design, updated)
@@ -996,6 +1027,13 @@ class CreateCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
                 _profiles_for_thread(library.inserts, initial_thread)
             ):
                 insert_dd.listItems.add(profile.display_name, index == 0)
+            tolerance_dd = inputs.addDropDownCommandInput(
+                "hole_diameter_tolerance",
+                "Insert Hole Diameter Tolerance",
+                adsk.core.DropDownStyles.TextListDropDownStyle,
+            )
+            for index, label in enumerate(HOLE_DIAMETER_TOLERANCES):
+                tolerance_dd.listItems.add(label, index == 0)
             screw_dd = inputs.addDropDownCommandInput(
                 "screw_profile", "Screw Profile", adsk.core.DropDownStyles.TextListDropDownStyle
             )
@@ -1282,6 +1320,12 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
             adsk.core.DropDownCommandInput.cast(inputs.itemById("head_shape")),
             record.get("headShape", "cap"),
         )
+        _select_hole_diameter_tolerance(
+            adsk.core.DropDownCommandInput.cast(
+                inputs.itemById("hole_diameter_tolerance")
+            ),
+            float(record.get("holeDiameterToleranceMm", 0.0)),
+        )
         offset = adsk.core.ValueCommandInput.cast(inputs.itemById("head_seat_offset"))
         offset.value = float(record.get("headSeatOffsetMm", 3.0)) / 10.0
         clearance = adsk.core.ValueCommandInput.cast(
@@ -1336,10 +1380,11 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
         else:
             action = "Select the two faces and points above."
         status.text = (
-            "{} Insert Ø{:.3g} x {:.3g} mm plus {:.3g} mm additional clearance; screw Ø{:.3g} mm; {} clearance Ø{:.3g} mm."
+            "{} Insert Ø{:.3g} mm +{:.3g} mm tolerance x {:.3g} mm plus {:.3g} mm depth clearance; screw Ø{:.3g} mm; {} clearance Ø{:.3g} mm."
         ).format(
             action,
-            insert.hole_diameter_mm,
+            insert.hole_diameter_mm + _selected_hole_diameter_tolerance_mm(inputs),
+            _selected_hole_diameter_tolerance_mm(inputs),
             insert.hole_depth_mm,
             _insert_clearance_depth_mm(inputs),
             screw.clearance_diameter_mm,
@@ -1395,6 +1440,7 @@ def _run_dialog_operation(inputs, records_by_label, library):
         _seat_offset_mm(inputs),
         _selected_head_shape(inputs),
         _insert_clearance_depth_mm(inputs),
+        _selected_hole_diameter_tolerance_mm(inputs),
     )
 
 

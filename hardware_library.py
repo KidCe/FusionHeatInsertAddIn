@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 
 
 class HardwareLibraryError(ValueError):
@@ -36,6 +36,9 @@ class ScrewProfile:
     button_head_clearance_diameter_mm: float
     cap_head_clearance_diameter_mm: float
     notes: str = ""
+    button_head_nominal_diameter_mm: Optional[float] = None
+    cap_head_nominal_diameter_mm: Optional[float] = None
+    head_clearance_allowance_mm: Optional[float] = None
 
     def head_clearance_diameter_mm(self, head_shape: str) -> float:
         if head_shape == "button":
@@ -141,6 +144,30 @@ def _optional_text(item: Dict[str, Any], name: str, context: str) -> str:
     return value.strip()
 
 
+def _optional_positive_number(
+    item: Dict[str, Any], name: str, context: str
+) -> Optional[float]:
+    if name not in item:
+        return None
+    value = item.get(name)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise HardwareLibraryError(f"{context}.{name} must be a positive number.")
+    return float(value)
+
+
+def _optional_non_negative_number(
+    item: Dict[str, Any], name: str, context: str
+) -> Optional[float]:
+    if name not in item:
+        return None
+    value = item.get(name)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise HardwareLibraryError(
+            f"{context}.{name} must be a non-negative number."
+        )
+    return float(value)
+
+
 def _parse_insert(item: Dict[str, Any], index: int) -> InsertProfile:
     context = f"insertProfiles[{index}]"
     profile = InsertProfile(
@@ -183,6 +210,15 @@ def _parse_screw(item: Dict[str, Any], index: int) -> ScrewProfile:
             item, "capHeadClearanceDiameterMm", context
         ),
         notes=_optional_text(item, "notes", context),
+        button_head_nominal_diameter_mm=_optional_positive_number(
+            item, "buttonHeadNominalDiameterMm", context
+        ),
+        cap_head_nominal_diameter_mm=_optional_positive_number(
+            item, "capHeadNominalDiameterMm", context
+        ),
+        head_clearance_allowance_mm=_optional_non_negative_number(
+            item, "headClearanceAllowanceMm", context
+        ),
     )
     if profile.recipe != "offset_head_seat_v1":
         raise HardwareLibraryError(f"{context}.recipe is not supported by this MVP.")

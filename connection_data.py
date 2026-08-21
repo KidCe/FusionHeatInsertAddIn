@@ -33,6 +33,7 @@ def parameter_specs(
     head_seat_offset_mm: float,
     head_shape: str = "cap",
     insert_clearance_depth_mm: float = 0.0,
+    hole_diameter_tolerance_mm: float = 0.0,
 ) -> Dict[str, Dict[str, str]]:
     if insert.thread_size != screw.thread_size:
         raise ValueError("Insert and screw thread sizes must match in the MVP.")
@@ -42,9 +43,15 @@ def parameter_specs(
         )
     if insert_clearance_depth_mm < 0:
         raise ValueError("Additional insert clearance depth cannot be negative.")
+    if hole_diameter_tolerance_mm < 0:
+        raise ValueError("Insert hole diameter tolerance cannot be negative.")
     prefix = parameter_prefix(connection_id)
     return {
-        "insertHoleDiameter": _length(prefix, "InsertHoleDiameter", insert.hole_diameter_mm),
+        "insertHoleDiameter": _length(
+            prefix,
+            "InsertHoleDiameter",
+            insert.hole_diameter_mm + hole_diameter_tolerance_mm,
+        ),
         "insertHoleDepth": _length(
             prefix,
             "InsertHoleDepth",
@@ -82,6 +89,7 @@ def make_record(
     screw_exit_face_token: str,
     source_point_tokens: list[str],
     timeline_group_name: str,
+    hole_diameter_tolerance_mm: float = 0.0,
 ) -> Dict[str, Any]:
     if location_count < 1:
         raise ValueError("A Connection Set must contain at least one location.")
@@ -98,6 +106,7 @@ def make_record(
         "screwPresetId": screw.id,
         "headShape": head_shape,
         "insertClearanceDepthMm": float(insert_clearance_depth_mm),
+        "holeDiameterToleranceMm": float(hole_diameter_tolerance_mm),
         "headSeatOffsetMm": float(head_seat_offset_mm),
         "locationCount": int(location_count),
         "parameterNames": dict(parameter_names),
@@ -120,6 +129,7 @@ def update_record(
     head_shape: str,
     insert_clearance_depth_mm: float,
     timeline_group_name: str,
+    hole_diameter_tolerance_mm: float = 0.0,
 ) -> Dict[str, Any]:
     result = deepcopy(record)
     result["updatedWithVersion"] = addin_version
@@ -129,6 +139,7 @@ def update_record(
     result["screwPresetId"] = screw.id
     result["headShape"] = head_shape
     result["insertClearanceDepthMm"] = float(insert_clearance_depth_mm)
+    result["holeDiameterToleranceMm"] = float(hole_diameter_tolerance_mm)
     result["headSeatOffsetMm"] = float(head_seat_offset_mm)
     result["timelineGroupName"] = timeline_group_name
     return result

@@ -35,6 +35,17 @@ class HardwareLibraryTests(unittest.TestCase):
         self.assertEqual(library.screw("generic-m2-screw-starter").thread_size, "M2")
         self.assertEqual(library.insert("generic-m4-starter").thread_size, "M4")
 
+    def test_ruthex_profiles_and_researched_screw_profiles_are_available(self):
+        library = hardware_library.HardwareLibrary.from_path(ROOT / "hardware_library.json")
+        voron = library.insert("ruthex-rx-m3x5x4-voron")
+        screw = library.screw("iso273-iso7380-iso4762-m6")
+
+        self.assertAlmostEqual(voron.hole_diameter_mm, 4.4)
+        self.assertAlmostEqual(voron.lead_in_diameter_mm, 5.0)
+        self.assertAlmostEqual(screw.head_clearance_diameter_mm("button"), 10.9)
+        self.assertAlmostEqual(screw.head_clearance_diameter_mm("cap"), 10.4)
+        self.assertAlmostEqual(screw.head_clearance_allowance_mm, 0.4)
+
     def test_duplicate_profile_id_is_rejected(self):
         payload = json.loads((ROOT / "hardware_library.json").read_text(encoding="utf-8"))
         payload["insertProfiles"].append(dict(payload["insertProfiles"][0]))
