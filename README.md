@@ -1,12 +1,54 @@
 # Heat Insert Connections for Autodesk Fusion
 
-Heat Insert Connections creates and edits a managed pair of native Fusion Hole features at one or more sketch-point locations:
+Create matching screw holes and heat-insert pockets in Autodesk Fusion 360 from
+a few selections. The add-in is designed for 3D-printed parts where two bodies
+need to be joined with a screw and a brass heat-set insert.
+
+## See it first
+
+> 🎬 **Demo placeholder** — Add a short GIF or 30–60 second screen recording
+> here showing: select a Screw Entry Face → pick sketch points → choose the
+> insert profile → preview → create.
+>
+> Suggested file: `docs/demo.gif` or a short linked YouTube/Loom video.
+
+## What it does
+
+You select the screw-entry surface and one or more sketch points. Heat Insert
+Connections then creates and keeps aligned:
 
 - a blind heat-insert pocket with a lead-in countersink;
-- a through screw-clearance hole in a second body; and
+- a through screw-clearance hole in the second body; and
 - a Button Head or Cap Head clearance pocket.
 
-The head-seat surface does not need to exist. The add-in creates it at the selected **Head Seat Distance from Screw Entry Face**.
+The head-seat surface does not need to exist. The add-in creates it at the
+selected **Head Seat Distance from Screw Entry Face**. With automatic face
+detection enabled, you only select the screw-entry face; Fusion finds the
+matching opposing planar face when the geometry is unambiguous.
+
+## Quick start
+
+1. Install the add-in with **Install Fusion Add-in.cmd**. The repository stays
+   outside Fusion so it remains easy to update.
+2. In Fusion, open **Solid > Create > Insert Connection**.
+3. Select the Screw Entry Face and sketch points, choose matching insert and
+   screw profiles, set the optional hole tolerance, preview, and create.
+
+The default workflow is intentionally short. Detailed manual selection,
+editing, profile authoring, automatic-face-detection rules, and limitations are
+documented below.
+
+## Is it a good fit?
+
+Use it when two solid bodies in the same Fusion component meet across parallel
+planar faces and the connection locations can be represented by sketch points.
+It is useful for printed housings, covers, brackets, and other parts that need
+repeatable screw-and-insert alignment.
+
+It currently does not infer curved or angled interfaces, arbitrary multi-body
+stackups, or broken references after major model changes. Automatic face
+detection is limited to a unique opposing planar face within 0.2 mm; manual
+face selection is available when the geometry is unusual.
 
 ## Command and selections
 
