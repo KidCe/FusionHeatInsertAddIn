@@ -6,16 +6,25 @@ Heat Insert Connections creates and edits a managed pair of native Fusion Hole f
 - a through screw-clearance hole in a second body; and
 - a Button Head or Cap Head clearance pocket.
 
-The head-seat surface does not need to exist. The add-in creates it at the selected **Head Seat Distance from Screw-to-Insert Face**.
+The head-seat surface does not need to exist. The add-in creates it at the selected **Head Seat Distance from Screw Entry Face**.
 
 ## Command and selections
 
 Open **Solid > Create > Insert Connection**. The **Action** dropdown switches the same dialog between **Create New** and **Edit Existing**.
 
+For the default **Create New** workflow, create a sketch on the face where the screw is inserted, add the connection points there, and select:
+
+- **Screw Entry Face**: the planar face on the screw-side body;
+- **Locations**: one or more sketch points on that face.
+
+With **Auto-detect Insert Face** enabled, Fusion finds the opposing planar face on another solid body in the same component. The candidate must face the Screw Entry Face, cover every selected location, and be no more than **0.2 mm** away. If multiple candidates are equally close or no unique candidate is found, the command stops safely and explains how to switch to manual selection.
+
+Disable **Auto-detect Insert Face** when the geometry is unusual or ambiguous. The manual fallback then exposes the original two-face workflow: select **Insert Entry Face** and **Screw Entry Face** explicitly.
+
 For Create New, select:
 
 - **Insert Entry Face**: the outside face where the insert is installed;
-- **Screw-to-Insert Face**: the face where the screw leaves the screw-side body and continues toward the insert body; and
+- **Screw Entry Face**: the face where the screw leaves the screw-side body and continues toward the insert body; and
 - **Locations**: one or more sketch points defining the connection axes.
 
 For Edit Existing, select the managed Connection Set and change its Thread Size, Insert Profile, Screw Profile, Head Shape, Head Seat Distance, or Additional Insert Clearance Depth. The original faces and points are reused.
@@ -49,9 +58,10 @@ For the simplest Windows workflow, double-click `Open Hardware Library Editor.cm
 
 - Capture Design History must be enabled.
 - Both targets must be different solid bodies in the same component.
-- Insert Entry Face, Screw-to-Insert Face, and the location sketch must be parallel.
+- In manual mode, Insert Entry Face, Screw Entry Face, and the location sketch must be parallel.
 - All locations must be sketch points from the same sketch.
 - Assembly occurrence proxies, curved faces, arbitrary cutter bodies, and automatic reference repair are not supported yet.
+- Automatic Insert Face detection supports planar opposing faces only; it does not infer curved, angled, or multi-body stackups.
 - Connection Sets use native Hole features, linked projection sketches, a construction plane, User Parameters, Design Attributes, and a named timeline group.
 - Helper sketches share a numbered `HIC <id>` name prefix so they remain adjacent in the Sketches folder. Fusion's public modeling API does not currently expose custom Sketches subfolders.
 

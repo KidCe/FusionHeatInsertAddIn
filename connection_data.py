@@ -38,7 +38,7 @@ def parameter_specs(
         raise ValueError("Insert and screw thread sizes must match in the MVP.")
     if head_seat_offset_mm <= 0:
         raise ValueError(
-            "Head seat distance from the Screw-to-Insert Face must be greater than zero."
+            "Head seat distance from the Screw Entry Face must be greater than zero."
         )
     if insert_clearance_depth_mm < 0:
         raise ValueError("Additional insert clearance depth cannot be negative.")

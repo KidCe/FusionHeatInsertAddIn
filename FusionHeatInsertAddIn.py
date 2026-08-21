@@ -4,7 +4,7 @@ Creates a managed Connection Set consisting of:
 
 * a blind insert pocket with a lead-in countersink,
 * a through screw-clearance hole, and
-* a head-clearance pocket positioned by its distance from the Screw-to-Insert Face.
+* a head-clearance pocket positioned by its distance from the Screw Entry Face.
 
 All visible UI and generated names are intentionally English.
 """
@@ -49,7 +49,7 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.3.1"
+ADDIN_VERSION = "0.4.0"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
 LEGACY_COMMAND_IDS = (
@@ -62,6 +62,10 @@ RECORD_PREFIX = "ConnectionSet."
 OWNER_ATTRIBUTE = "ConnectionSetId"
 ROLE_ATTRIBUTE = "ConnectionSetRole"
 HEAD_SHAPES = {"Button Head": "button", "Cap Head": "cap"}
+AUTO_INSERT_FACE_MAX_GAP_MM = 0.2
+AUTO_INSERT_FACE_MAX_GAP_CM = AUTO_INSERT_FACE_MAX_GAP_MM / 10.0
+GEOMETRY_TOLERANCE_CM = 1e-5
+NORMAL_PARALLEL_TOLERANCE = 1e-5
 HANDLERS: List[Any] = []
 APP = None
 UI = None
@@ -165,7 +169,7 @@ def _populate_profile_dropdown(dropdown, profiles, selected_id=None) -> None:
 def _plane_from_face(face: adsk.fusion.BRepFace) -> adsk.core.Plane:
     plane = adsk.core.Plane.cast(face.geometry)
     if not plane:
-        raise ConnectionSetError("Only planar Insert Entry and Screw-to-Insert faces are supported.")
+        raise ConnectionSetError("Only planar faces are supported for this connection.")
     return plane
 
 
@@ -188,10 +192,135 @@ def _normals_are_parallel(first: adsk.core.Plane, second: adsk.core.Plane) -> bo
     return abs(abs(a.dotProduct(b)) - 1.0) <= 1e-5
 
 
+def _face_normal(face: adsk.fusion.BRepFace) -> adsk.core.Vector3D:
+    evaluator = adsk.core.SurfaceEvaluator.cast(face.evaluator)
+    if not evaluator:
+        raise ConnectionSetError("Fusion could not evaluate a selected planar face.")
+    success, normal = evaluator.getNormalAtPoint(face.pointOnFace)
+    if not success or not normal or not normal.normalize():
+        raise ConnectionSetError("Fusion could not determine the direction of a selected face.")
+    return normal
+
+
+def _points_are_on_face(
+    face: adsk.fusion.BRepFace,
+    points: List[adsk.fusion.SketchPoint],
+) -> bool:
+    for point in points:
+        world_point = getattr(point, "worldGeometry", None)
+        if not world_point or not face.isPointOnFace(world_point):
+            return False
+    return True
+
+
+def _points_project_inside_face(
+    face: adsk.fusion.BRepFace,
+    points: List[adsk.fusion.SketchPoint],
+) -> bool:
+    evaluator = adsk.core.SurfaceEvaluator.cast(face.evaluator)
+    if not evaluator:
+        return False
+    for point in points:
+        world_point = getattr(point, "worldGeometry", None)
+        if not world_point:
+            return False
+        success, parameter = evaluator.getParameterAtPoint(world_point)
+        if not success or not evaluator.isParameterOnFace(parameter):
+            return False
+    return True
+
+
+def _auto_detect_insert_face(
+    screw_face: adsk.fusion.BRepFace,
+    points: List[adsk.fusion.SketchPoint],
+    component: adsk.fusion.Component,
+) -> adsk.fusion.BRepFace:
+    screw_body = screw_face.body
+    screw_normal = _face_normal(screw_face)
+    screw_point = screw_face.pointOnFace
+    candidates = []
+
+    bodies = component.bRepBodies
+    for body_index in range(bodies.count):
+        candidate_body = bodies.item(body_index)
+        if (
+            not candidate_body
+            or candidate_body == screw_body
+            or not candidate_body.isSolid
+        ):
+            continue
+        faces = candidate_body.faces
+        for face_index in range(faces.count):
+            candidate = faces.item(face_index)
+            if not candidate:
+                continue
+            try:
+                _plane_from_face(candidate)
+                candidate_normal = _face_normal(candidate)
+            except ConnectionSetError:
+                continue
+
+            # Solid-face normals point outward. The insert entry face must face
+            # back toward the screw body, so the normals must be anti-parallel.
+            if screw_normal.dotProduct(candidate_normal) > -1.0 + NORMAL_PARALLEL_TOLERANCE:
+                continue
+
+            gap_cm = screw_point.vectorTo(candidate.pointOnFace).dotProduct(screw_normal)
+            if gap_cm < -GEOMETRY_TOLERANCE_CM:
+                continue
+            if gap_cm > AUTO_INSERT_FACE_MAX_GAP_CM + GEOMETRY_TOLERANCE_CM:
+                continue
+            if not _points_project_inside_face(candidate, points):
+                continue
+            candidates.append((max(0.0, gap_cm), candidate))
+
+    if not candidates:
+        raise ConnectionSetError(
+            "Automatic Insert Face detection found no unique opposing planar face "
+            "within 0.2 mm that covers all selected locations. Disable Auto-detect "
+            "Insert Face and select the Insert Entry Face manually."
+        )
+
+    candidates.sort(key=lambda item: item[0])
+    best_gap, best_face = candidates[0]
+    if len(candidates) > 1 and abs(candidates[1][0] - best_gap) <= GEOMETRY_TOLERANCE_CM:
+        raise ConnectionSetError(
+            "Automatic Insert Face detection found multiple equally close candidates. "
+            "Disable Auto-detect Insert Face and select the Insert Entry Face manually."
+        )
+    return best_face
+
+
+def _auto_detect_insert_face_enabled(inputs) -> bool:
+    toggle = adsk.core.BoolValueCommandInput.cast(
+        inputs.itemById("auto_detect_insert_face")
+    )
+    return bool(toggle and toggle.value)
+
+
+def _selected_create_faces(
+    inputs,
+    points: List[adsk.fusion.SketchPoint],
+) -> Tuple[adsk.fusion.BRepFace, adsk.fusion.BRepFace, bool]:
+    screw_face = _selected_entity(inputs, "screw_exit_face", adsk.fusion.BRepFace.cast)
+    auto_detect = _auto_detect_insert_face_enabled(inputs)
+    if auto_detect:
+        component = getattr(getattr(screw_face, "body", None), "parentComponent", None)
+        if not component:
+            raise ConnectionSetError(
+                "The selected Screw Entry Face does not belong to a component."
+            )
+        insert_face = _auto_detect_insert_face(screw_face, points, component)
+    else:
+        insert_face = _selected_entity(inputs, "insert_face", adsk.fusion.BRepFace.cast)
+    return insert_face, screw_face, auto_detect
+
+
 def _validate_geometry(
     insert_face: adsk.fusion.BRepFace,
     screw_face: adsk.fusion.BRepFace,
     points: List[adsk.fusion.SketchPoint],
+    auto_detect_insert_face: bool = False,
 ) -> Tuple[adsk.fusion.Component, adsk.fusion.BRepBody, adsk.fusion.BRepBody]:
     if getattr(insert_face, "assemblyContext", None) or getattr(
         screw_face, "assemblyContext", None
@@ -213,6 +342,11 @@ def _validate_geometry(
     screw_plane = _plane_from_face(screw_face)
     if not _normals_are_parallel(insert_plane, screw_plane):
         raise ConnectionSetError("Insert Entry and Screw-to-Insert faces must be parallel.")
+    if auto_detect_insert_face and not _points_are_on_face(screw_face, points):
+        raise ConnectionSetError(
+            "With Auto-detect Insert Face enabled, every location must be a sketch point "
+            "on the selected Screw Entry Face."
+        )
 
     source_sketch = points[0].parentSketch
     if not source_sketch or source_sketch.parentComponent != component:
@@ -469,7 +603,7 @@ def _seat_offset_mm(inputs) -> float:
     value_input = adsk.core.ValueCommandInput.cast(inputs.itemById("head_seat_offset"))
     if not value_input or value_input.value <= 0:
         raise ConnectionSetError(
-            "Head Seat Distance from Screw-to-Insert Face must be greater than zero."
+            "Head Seat Distance from Screw Entry Face must be greater than zero."
         )
     return value_input.value * 10.0
 
@@ -508,11 +642,15 @@ def _select_head_shape(dropdown, head_shape: str) -> None:
 def _create_connection_set(inputs) -> Dict[str, Any]:
     design = _active_design()
     library = _library()
-    insert_face = _selected_entity(inputs, "insert_face", adsk.fusion.BRepFace.cast)
-    screw_face = _selected_entity(inputs, "screw_exit_face", adsk.fusion.BRepFace.cast)
     source_points = _selected_points(inputs)
+    insert_face, screw_face, auto_detect_insert_face = _selected_create_faces(
+        inputs, source_points
+    )
     component, insert_body, screw_body = _validate_geometry(
-        insert_face, screw_face, source_points
+        insert_face,
+        screw_face,
+        source_points,
+        auto_detect_insert_face=auto_detect_insert_face,
     )
     insert_dropdown = adsk.core.DropDownCommandInput.cast(inputs.itemById("insert_profile"))
     screw_dropdown = adsk.core.DropDownCommandInput.cast(inputs.itemById("screw_profile"))
@@ -1088,12 +1226,20 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
     def _set_visibility(self, inputs) -> None:
         editing = _dialog_mode(inputs) == "edit"
         inputs.itemById("connection_set").isVisible = editing
+        auto_detect = adsk.core.BoolValueCommandInput.cast(
+            inputs.itemById("auto_detect_insert_face")
+        )
         insert_face = adsk.core.SelectionCommandInput.cast(inputs.itemById("insert_face"))
         screw_face = adsk.core.SelectionCommandInput.cast(inputs.itemById("screw_exit_face"))
         locations = adsk.core.SelectionCommandInput.cast(inputs.itemById("locations"))
-        for selection in (insert_face, screw_face, locations):
-            selection.isVisible = not editing
-        insert_face.setSelectionLimits(0 if editing else 1, 1)
+        if auto_detect:
+            auto_detect.isVisible = not editing
+        insert_face.isVisible = not editing and not bool(auto_detect and auto_detect.value)
+        screw_face.isVisible = not editing
+        locations.isVisible = not editing
+        insert_face.setSelectionLimits(
+            0 if editing or bool(auto_detect and auto_detect.value) else 1, 1
+        )
         screw_face.setSelectionLimits(0 if editing else 1, 1)
         locations.setSelectionLimits(0 if editing else 1, 0)
         enabled = adsk.core.BoolValueCommandInput.cast(
@@ -1180,7 +1326,15 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
         insert = self.library.insert(_selected_dropdown_id(insert_dd, self.library.inserts))
         screw = self.library.screw(_selected_dropdown_id(screw_dd, self.library.screws))
         head_shape = _selected_head_shape(inputs)
-        action = "Existing faces and points will be reused." if _dialog_mode(inputs) == "edit" else "Select the three geometry inputs above."
+        if _dialog_mode(inputs) == "edit":
+            action = "Existing faces and points will be reused."
+        elif _auto_detect_insert_face_enabled(inputs):
+            action = (
+                "Select one Screw Entry Face and points on that face; the Insert Entry "
+                "Face is detected within 0.2 mm."
+            )
+        else:
+            action = "Select the two faces and points above."
         status.text = (
             "{} Insert Ø{:.3g} x {:.3g} mm plus {:.3g} mm additional clearance; screw Ø{:.3g} mm; {} clearance Ø{:.3g} mm."
         ).format(
@@ -1252,14 +1406,11 @@ class PreviewAppearance:
     def _bodies(self, inputs) -> List[Any]:
         bodies = []
         if _dialog_mode(inputs) == "create":
-            for input_id in ("insert_face", "screw_exit_face"):
-                selection = adsk.core.SelectionCommandInput.cast(
-                    inputs.itemById(input_id)
-                )
-                if selection and selection.selectionCount:
-                    face = adsk.fusion.BRepFace.cast(selection.selection(0).entity)
-                    if face and face.body:
-                        bodies.append(face.body)
+            points = _selected_points(inputs)
+            insert_face, screw_face, _ = _selected_create_faces(inputs, points)
+            for face in (insert_face, screw_face):
+                if face and face.body:
+                    bodies.append(face.body)
         else:
             set_dd = adsk.core.DropDownCommandInput.cast(
                 inputs.itemById("connection_set")
@@ -1386,7 +1537,7 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
             inputs.addTextBoxCommandInput(
                 "intro",
                 "",
-                "Create or edit a paired insert connection. Screw-to-Insert Face is the face where the screw leaves its body and enters the insert body. Head Seat Distance is measured from that face back through the screw-side body.",
+                "Create or edit a paired insert connection. In automatic mode, select a Screw Entry Face and sketch points on that face; Fusion finds the opposing Insert Entry Face on another solid body within 0.2 mm. Disable automatic detection for manual two-face selection.",
                 4,
                 True,
             )
@@ -1406,15 +1557,21 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
             if not records_by_label:
                 set_dd.listItems.add("No managed Connection Sets found", True)
 
+            auto_detect = inputs.addBoolValueInput(
+                "auto_detect_insert_face", "Auto-detect Insert Face", True, "", True
+            )
+            auto_detect.isVisible = True
             insert_face = inputs.addSelectionInput(
-                "insert_face", "Insert Entry Face", "Select the outward insert entry face."
+                "insert_face",
+                "Insert Entry Face (Manual)",
+                "Select the outward insert entry face when automatic detection is disabled.",
             )
             insert_face.addSelectionFilter("PlanarFaces")
             insert_face.setSelectionLimits(1, 1)
             screw_face = inputs.addSelectionInput(
                 "screw_exit_face",
-                "Screw-to-Insert Face",
-                "Select the face where the screw leaves this body and enters the insert body.",
+                "Screw Entry Face",
+                "Select the planar face where the screw is inserted. In automatic mode, locations must be sketch points on this face.",
             )
             screw_face.addSelectionFilter("PlanarFaces")
             screw_face.setSelectionLimits(1, 1)
@@ -1458,7 +1615,7 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
             head_shape.listItems.add("Cap Head", True)
             inputs.addValueInput(
                 "head_seat_offset",
-                "Head Seat Distance from Screw-to-Insert Face",
+                "Head Seat Distance from Screw Entry Face",
                 "mm",
                 adsk.core.ValueInput.createByString("3 mm"),
             )
