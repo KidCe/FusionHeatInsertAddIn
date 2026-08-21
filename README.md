@@ -57,14 +57,46 @@ For the simplest Windows workflow, double-click `Open Hardware Library Editor.cm
 
 ## Installation
 
-Copy the add-in folder to:
+Keep the Git repository outside Fusion so it can be updated normally with Git. On Windows, clone it for example to:
+
+```text
+%USERPROFILE%\Documents\GitHub\FusionHeatInsertAddIn
+```
+
+### Easiest Windows installation from a ZIP
+
+1. Download **Code > Download ZIP** from the [GitHub repository](https://github.com/KidCe/FusionHeatInsertAddIn).
+2. Extract the ZIP to a normal folder. Do not run the files from inside the ZIP archive.
+3. Double-click **Install Fusion Add-in.cmd**.
+
+The script copies only the Fusion runtime files to the current user's Fusion Add-ins directory. It does not require Git, Python, administrator rights, or a fixed Windows user name.
+
+### Installation from a Git clone
+
+From the repository directory, double-click **Install Fusion Add-in.cmd**, or run:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-FusionAddIn.ps1 -Clean
+```
+
+The script copies only the Fusion runtime files to:
 
 ```text
 %APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\FusionHeatInsertAddIn
 ```
+
+`%APPDATA%` resolves to the current Windows user's profile, so the script does not contain a fixed user name. Use `-FusionAddInsRoot` only when Fusion uses a non-default add-in location.
+
+The profile editor remains in the repository. Double-click **Open Hardware Library Editor.cmd** to start a small loopback-only PowerShell server and open the self-contained HTML editor in the default browser. Python is not required for this normal workflow, and the editor can load and save the adjacent `hardware_library.json` directly. Close the PowerShell window to stop the local server. Save the updated library there, then double-click **Install Fusion Add-in.cmd** again to copy it into Fusion. The `-Clean` switch removes repository-only files left by older direct-copy installations.
+
+The Python loopback server remains available for development, but it is not needed for normal users.
 
 The manifest enables startup loading. If Fusion is already running, restart Fusion or reload **FusionHeatInsertAddIn** from **Utilities > Scripts and Add-Ins** after replacing its files.
 
 ## Validation boundary
 
 Local tests cover the library, metadata, syntax, and configured Hole directions. These checks do not prove geometry inside Fusion. Before production use, create and edit a Connection Set and visually verify direction, dimensions, save/reopen behavior, and feature health.
+
+## AI assistance disclosure
+
+This project was created and maintained with substantial assistance from OpenAI Codex. The repository maintainer directed the work, made the project decisions, and is responsible for reviewing and using the result.
