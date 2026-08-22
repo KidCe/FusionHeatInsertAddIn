@@ -199,6 +199,10 @@ class AutoFaceDetectionTests(unittest.TestCase):
         )
 
         self.assertEqual(result, "-headSeatOffset")
+        self.assertIs(
+            self.module._head_seat_reference_face(screw_face, "exit", points),
+            screw_face.body.faces.item(1),
+        )
 
     def test_points_with_small_plane_rounding_offset_are_still_on_face(self):
         body = _Body(types.SimpleNamespace())

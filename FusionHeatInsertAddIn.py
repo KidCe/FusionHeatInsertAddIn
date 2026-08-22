@@ -50,7 +50,7 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.5.12"
+ADDIN_VERSION = "0.5.13"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
 LEGACY_COMMAND_IDS = (
@@ -509,16 +509,7 @@ def _head_seat_offset_expression(
     points: Optional[List[adsk.fusion.SketchPoint]] = None,
 ) -> str:
     """Return a signed offset from the selected face toward the screw body."""
-    if reference == "entry":
-        base_face = screw_face
-    elif reference == "exit":
-        if not points:
-            raise ConnectionSetError(
-                "Locations are required to determine the Screw body's exit face."
-            )
-        base_face = _screw_body_exit_face(screw_face, points)
-    else:
-        raise ConnectionSetError("Select a valid Head Seat Position Reference.")
+    base_face = _head_seat_reference_face(screw_face, reference, points)
 
     face_plane = _plane_from_face(base_face)
     geometry_normal = face_plane.normal
@@ -532,6 +523,22 @@ def _head_seat_offset_expression(
     # to the B-Rep face's outward normal. Move opposite the outward normal so
     # the seat plane stays inside the screw body in either case.
     return "{}{}".format("-" if alignment > 0 else "", parameter_name)
+
+
+def _head_seat_reference_face(
+    screw_face,
+    reference: str,
+    points: Optional[List[adsk.fusion.SketchPoint]] = None,
+):
+    if reference == "entry":
+        return screw_face
+    if reference == "exit":
+        if not points:
+            raise ConnectionSetError(
+                "Locations are required to determine the Screw body's exit face."
+            )
+        return _screw_body_exit_face(screw_face, points)
+    raise ConnectionSetError("Select a valid Head Seat Position Reference.")
 
 
 def _auto_detect_insert_face(
@@ -1245,7 +1252,7 @@ def _create_connection_set(inputs, selection_cache=None) -> Dict[str, Any]:
 
         plane_input = component.constructionPlanes.createInput()
         if not plane_input.setByOffset(
-            screw_face,
+            _head_seat_reference_face(screw_face, head_seat_reference, source_points),
             _value(
                 _head_seat_offset_expression(
                     screw_face,
@@ -1441,9 +1448,9 @@ def _update_connection_set(
             parameters[key].expression = expression
         if not definition or not definition.redefine(
             _value(offset_expression),
-            source_screw_face
-            if head_seat_reference == "entry"
-            else _screw_body_exit_face(source_screw_face, source_points),
+            _head_seat_reference_face(
+                source_screw_face, head_seat_reference, source_points
+            ),
         ):
             raise RuntimeError("Fusion could not redefine the Head Seat Plane reference.")
         if not design.computeAll():
@@ -2170,6 +2177,51 @@ def _run_dialog_operation(inputs, records_by_label, library, selection_cache=Non
     )
 
 
+def _preview_signature(inputs, selection_cache=None):
+    """Return a stable snapshot so duplicate preview events can be skipped."""
+    def selected_name(input_id):
+        input_value = inputs.itemById(input_id)
+        item = getattr(input_value, "selectedItem", None) if input_value else None
+        return getattr(item, "name", None) if item else None
+
+    def scalar(input_id):
+        input_value = inputs.itemById(input_id)
+        value = getattr(input_value, "value", None) if input_value else None
+        if isinstance(value, bool) or value is None:
+            return value
+        try:
+            return round(float(value), 12)
+        except (TypeError, ValueError):
+            return str(value)
+
+    def cached_token(key):
+        cached = (selection_cache or {}).get(key) or {}
+        return cached.get("token") or getattr(cached.get("entity"), "entityToken", "")
+
+    return (
+        selected_name("dialog_mode"),
+        selected_name("connection_set"),
+        selected_name("thread_size"),
+        selected_name("insert_profile"),
+        selected_name("screw_profile"),
+        selected_name("hole_diameter_tolerance"),
+        selected_name("head_shape"),
+        selected_name("head_seat_reference"),
+        scalar("head_seat_offset"),
+        scalar("insert_clearance_depth"),
+        scalar("auto_insert_face_tolerance"),
+        scalar("add_insert_clearance"),
+        scalar("auto_detect_insert_face"),
+        cached_token("screw_exit_face"),
+        cached_token("insert_face"),
+        tuple(
+            cached_token("locations:{}".format(index))
+            for index in range(64)
+            if cached_token("locations:{}".format(index))
+        ),
+    )
+
+
 class PreviewAppearance:
     def __init__(self, records_by_label, selection_cache=None):
         self.records_by_label = records_by_label
@@ -2242,8 +2294,17 @@ class ConnectionDialogPreviewHandler(adsk.core.CommandEventHandler):
         )
         if not preview or not preview.value:
             self.dialog_state["preview_error"] = None
+            self.dialog_state["last_preview_signature"] = None
             self.appearance.restore()
             return
+        signature = _preview_signature(
+            args.command.commandInputs,
+            self.dialog_state.get("selection_cache"),
+        )
+        if signature == self.dialog_state.get("last_preview_signature"):
+            args.isValidResult = not bool(self.dialog_state.get("preview_error"))
+            return
+        self.dialog_state["last_preview_signature"] = signature
         try:
             self.appearance.apply(args.command.commandInputs)
             _run_dialog_operation(

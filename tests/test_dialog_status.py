@@ -45,6 +45,21 @@ class DialogStatusTests(unittest.TestCase):
             "Not ready — Select Locations.",
         )
 
+    def test_preview_signature_changes_for_real_parameter_changes(self):
+        values = {
+            "head_seat_offset": types.SimpleNamespace(value=0.3),
+            "head_seat_reference": types.SimpleNamespace(
+                selectedItem=types.SimpleNamespace(name="From Screw Exit Face")
+            ),
+        }
+        inputs = types.SimpleNamespace(itemById=values.get)
+
+        first = self.module._preview_signature(inputs, {})
+        values["head_seat_offset"].value = 0.4
+        second = self.module._preview_signature(inputs, {})
+
+        self.assertNotEqual(first, second)
+
 
 if __name__ == "__main__":
     unittest.main()
