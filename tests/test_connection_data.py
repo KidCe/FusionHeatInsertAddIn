@@ -73,6 +73,7 @@ class ConnectionDataTests(unittest.TestCase):
         decoded = decode_record(encode_record(record))
         self.assertEqual(decoded["locationCount"], 3)
         self.assertEqual(decoded["holeDiameterToleranceMm"], 0.05)
+        self.assertEqual(decoded["headSeatReference"], "entry")
         self.assertEqual(record_label(decoded), "HIC abc123 — M3 — 3 locations")
 
         m4_insert = self.library.insert("generic-m4-starter")
@@ -87,12 +88,14 @@ class ConnectionDataTests(unittest.TestCase):
             insert_clearance_depth_mm=2.5,
             timeline_group_name="HIC abc123 — M4 — 3 locations",
             hole_diameter_tolerance_mm=0.1,
+            head_seat_reference="exit",
         )
         self.assertEqual(updated["threadSize"], "M4")
         self.assertEqual(updated["headSeatOffsetMm"], 4.0)
         self.assertEqual(updated["headShape"], "button")
         self.assertEqual(updated["insertClearanceDepthMm"], 2.5)
         self.assertEqual(updated["holeDiameterToleranceMm"], 0.1)
+        self.assertEqual(updated["headSeatReference"], "exit")
         self.assertEqual(decoded["threadSize"], "M3")
 
 

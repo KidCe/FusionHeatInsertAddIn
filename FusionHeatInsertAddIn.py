@@ -4,7 +4,7 @@ Creates a managed Connection Set consisting of:
 
 * a blind insert pocket with a lead-in countersink,
 * a through screw-clearance hole, and
-* a head-clearance pocket positioned by its distance from the Screw Entry Face.
+* a head-clearance pocket positioned by a distance from a selected screw-body face.
 
 All visible UI and generated names are intentionally English.
 """
@@ -50,7 +50,7 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.5.11"
+ADDIN_VERSION = "0.5.12"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
 LEGACY_COMMAND_IDS = (
@@ -63,6 +63,10 @@ RECORD_PREFIX = "ConnectionSet."
 OWNER_ATTRIBUTE = "ConnectionSetId"
 ROLE_ATTRIBUTE = "ConnectionSetRole"
 HEAD_SHAPES = {"Button Head": "button", "Cap Head": "cap"}
+HEAD_SEAT_REFERENCES = {
+    "From Screw Entry Face": "entry",
+    "From Screw Exit Face": "exit",
+}
 HOLE_DIAMETER_TOLERANCES = {
     "Profile Value (+0.00 mm)": 0.0,
     "+0.05 mm": 0.05,
@@ -457,16 +461,73 @@ def _head_clearance_direction_hint(head_seat_plane, screw_face):
     return normal
 
 
-def _head_seat_offset_expression(screw_face, parameter_name: str) -> str:
-    """Return a signed offset that always moves the seat plane into the body."""
-    face_plane = _plane_from_face(screw_face)
+def _screw_body_exit_face(
+    screw_face: adsk.fusion.BRepFace,
+    points: List[adsk.fusion.SketchPoint],
+) -> adsk.fusion.BRepFace:
+    """Find the first planar face where the screw axis leaves the screw body."""
+    screw_normal = _face_normal(screw_face)
+    screw_plane = _plane_from_face(screw_face)
+    inward = adsk.core.Vector3D.create(
+        -screw_normal.x, -screw_normal.y, -screw_normal.z
+    )
+    exit_candidates = []
+    screw_faces = screw_face.body.faces
+    for face_index in range(screw_faces.count):
+        exit_face = screw_faces.item(face_index)
+        if not exit_face or _faces_represent_same_entity(exit_face, screw_face):
+            continue
+        try:
+            exit_plane = _plane_from_face(exit_face)
+            exit_normal = _face_normal(exit_face)
+        except ConnectionSetError:
+            continue
+        if screw_normal.dotProduct(exit_normal) > -1.0 + NORMAL_PARALLEL_TOLERANCE:
+            continue
+        exit_distance_cm = screw_plane.origin.vectorTo(
+            exit_plane.origin
+        ).dotProduct(inward)
+        if exit_distance_cm <= GEOMETRY_TOLERANCE_CM:
+            continue
+        if not _points_project_inside_face(exit_face, points):
+            continue
+        exit_candidates.append((exit_distance_cm, exit_face))
+    if not exit_candidates:
+        raise ConnectionSetError(
+            "Automatic Insert Face detection could not find the next planar exit "
+            "surface of the Screw body along the selected Screw Entry Face direction. "
+            "Select the Screw Entry Face and locations on the outer screw surface."
+        )
+    exit_candidates.sort(key=lambda item: item[0])
+    return exit_candidates[0][1]
+
+
+def _head_seat_offset_expression(
+    screw_face,
+    parameter_name: str,
+    reference: str = "entry",
+    points: Optional[List[adsk.fusion.SketchPoint]] = None,
+) -> str:
+    """Return a signed offset from the selected face toward the screw body."""
+    if reference == "entry":
+        base_face = screw_face
+    elif reference == "exit":
+        if not points:
+            raise ConnectionSetError(
+                "Locations are required to determine the Screw body's exit face."
+            )
+        base_face = _screw_body_exit_face(screw_face, points)
+    else:
+        raise ConnectionSetError("Select a valid Head Seat Position Reference.")
+
+    face_plane = _plane_from_face(base_face)
     geometry_normal = face_plane.normal
-    outward_normal = _face_normal(screw_face)
+    outward_normal = _face_normal(base_face)
     if not geometry_normal.normalize():
         raise ConnectionSetError("Fusion could not normalize the screw-entry face plane.")
     alignment = geometry_normal.dotProduct(outward_normal)
     if abs(alignment) <= NORMAL_PARALLEL_TOLERANCE:
-        raise ConnectionSetError("Fusion could not determine the screw-entry face orientation.")
+            raise ConnectionSetError("Fusion could not determine the selected head-seat reference face orientation.")
     # setByOffset follows the geometric plane normal, which can be opposite
     # to the B-Rep face's outward normal. Move opposite the outward normal so
     # the seat plane stays inside the screw body in either case.
@@ -661,6 +722,11 @@ def _refresh_auto_detected_insert_face(inputs, points, selection_cache=None) -> 
     """
     if not _auto_detect_insert_face_enabled(inputs) or not points:
         return False
+    if selection_cache is not None:
+        # A face-/location-/tolerance change invalidates the previous
+        # detection. Keep the visible selection until a replacement is found,
+        # but do not let validation reuse the stale cached entity.
+        selection_cache.pop("insert_face", None)
     insert_selection = adsk.core.SelectionCommandInput.cast(
         inputs.itemById("insert_face")
     )
@@ -723,12 +789,17 @@ def _selected_create_faces(
             raise ConnectionSetError(
                 "The selected Screw Entry Face does not belong to a component."
             )
-        insert_face = _auto_detect_insert_face(
-            screw_face,
-            points,
-            component,
-            max_gap_mm=_selected_auto_insert_face_tolerance_mm(inputs),
+        insert_face = _resolve_cached_selection(
+            selection_cache, "insert_face", adsk.fusion.BRepFace.cast
         )
+        if not insert_face:
+            insert_face = _auto_detect_insert_face(
+                screw_face,
+                points,
+                component,
+                max_gap_mm=_selected_auto_insert_face_tolerance_mm(inputs),
+            )
+            _remember_selection(selection_cache, "insert_face", insert_face)
     else:
         insert_face = _selected_entity(
             inputs, "insert_face", adsk.fusion.BRepFace.cast, selection_cache
@@ -1032,7 +1103,7 @@ def _seat_offset_mm(inputs) -> float:
     value_input = adsk.core.ValueCommandInput.cast(inputs.itemById("head_seat_offset"))
     if not value_input or value_input.value <= 0:
         raise ConnectionSetError(
-            "Head Seat Distance from Screw Entry Face must be greater than zero."
+            "Head Seat Distance must be greater than zero."
         )
     return value_input.value * 10.0
 
@@ -1090,6 +1161,24 @@ def _select_head_shape(dropdown, head_shape: str) -> None:
     _select_dropdown_name(dropdown, display_name)
 
 
+def _selected_head_seat_reference(inputs) -> str:
+    dropdown = adsk.core.DropDownCommandInput.cast(
+        inputs.itemById("head_seat_reference")
+    )
+    item = dropdown.selectedItem if dropdown else None
+    if not item or item.name not in HEAD_SEAT_REFERENCES:
+        raise ConnectionSetError("Select a Head Seat Position Reference.")
+    return HEAD_SEAT_REFERENCES[item.name]
+
+
+def _select_head_seat_reference(dropdown, reference: str) -> None:
+    display_name = next(
+        (name for name, value in HEAD_SEAT_REFERENCES.items() if value == reference),
+        "From Screw Entry Face",
+    )
+    _select_dropdown_name(dropdown, display_name)
+
+
 def _create_connection_set(inputs, selection_cache=None) -> Dict[str, Any]:
     design = _active_design()
     library = _library()
@@ -1108,6 +1197,7 @@ def _create_connection_set(inputs, selection_cache=None) -> Dict[str, Any]:
     insert = library.insert(_selected_dropdown_id(insert_dropdown, library.inserts))
     screw = library.screw(_selected_dropdown_id(screw_dropdown, library.screws))
     head_seat_offset_mm = _seat_offset_mm(inputs)
+    head_seat_reference = _selected_head_seat_reference(inputs)
     insert_clearance_depth_mm = _insert_clearance_depth_mm(inputs)
     hole_diameter_tolerance_mm = _selected_hole_diameter_tolerance_mm(inputs)
     head_shape = _selected_head_shape(inputs)
@@ -1158,7 +1248,10 @@ def _create_connection_set(inputs, selection_cache=None) -> Dict[str, Any]:
             screw_face,
             _value(
                 _head_seat_offset_expression(
-                    screw_face, parameter_names["headSeatOffset"]
+                    screw_face,
+                    parameter_names["headSeatOffset"],
+                    head_seat_reference,
+                    source_points,
                 )
             ),
         ):
@@ -1218,6 +1311,7 @@ def _create_connection_set(inputs, selection_cache=None) -> Dict[str, Any]:
             insert=insert,
             screw=screw,
             head_seat_offset_mm=head_seat_offset_mm,
+            head_seat_reference=head_seat_reference,
             head_shape=head_shape,
             insert_clearance_depth_mm=insert_clearance_depth_mm,
             hole_diameter_tolerance_mm=hole_diameter_tolerance_mm,
@@ -1270,6 +1364,7 @@ def _timeline_group_by_name(
 def _update_connection_set(
     record: Dict[str, Any], insert, screw, seat_offset_mm: float, head_shape: str,
     insert_clearance_depth_mm: float, hole_diameter_tolerance_mm: float = 0.0,
+    head_seat_reference: str = "entry",
 ) -> Dict[str, Any]:
     design = _active_design()
     if insert.thread_size != screw.thread_size:
@@ -1300,9 +1395,57 @@ def _update_connection_set(
             )
         features[role] = feature
 
+    source_screw_face = adsk.fusion.BRepFace.cast(
+        _resolve_one(design, record.get("screwExitFaceToken", ""))
+    )
+    source_points = [
+        adsk.fusion.SketchPoint.cast(_resolve_one(design, token))
+        for token in record.get("sourcePointTokens", [])
+    ]
+    source_points = [point for point in source_points if point]
+    if not source_screw_face or not source_points:
+        raise ConnectionSetError(
+            "Connection Set {} is missing the native Screw Entry Face or locations needed to position the head seat.".format(
+                record["id"]
+            )
+        )
+    seat_plane = _resolve_one(
+        design, record.get("helperTokens", {}).get("seatPlane", "")
+    )
+    if not seat_plane or not getattr(seat_plane, "isValid", False):
+        raise ConnectionSetError(
+            "Connection Set {} is missing its managed Head Seat Plane.".format(
+                record["id"]
+            )
+        )
+    offset_expression = _head_seat_offset_expression(
+        source_screw_face,
+        names["headSeatOffset"],
+        head_seat_reference,
+        source_points,
+    )
+    definition = adsk.fusion.ConstructionPlaneOffsetDefinition.cast(
+        seat_plane.definition
+    )
+    if not definition:
+        raise ConnectionSetError(
+            "Connection Set {} has an unsupported Head Seat Plane definition.".format(
+                record["id"]
+            )
+        )
+    old_planar_entity = definition.planarEntity
+    old_offset_expression = definition.offset.expression
+
     try:
         for key, expression in expressions.items():
             parameters[key].expression = expression
+        if not definition or not definition.redefine(
+            _value(offset_expression),
+            source_screw_face
+            if head_seat_reference == "entry"
+            else _screw_body_exit_face(source_screw_face, source_points),
+        ):
+            raise RuntimeError("Fusion could not redefine the Head Seat Plane reference.")
         if not design.computeAll():
             raise RuntimeError("Fusion did not complete Compute All.")
         problem = _feature_problem(features.values())
@@ -1314,6 +1457,14 @@ def _update_connection_set(
                 parameters[key].expression = expression
             except Exception:
                 pass
+        try:
+            definition.redefine(_value(old_offset_expression), old_planar_entity)
+        except Exception:
+            _log(
+                "Could not restore the previous Head Seat Plane definition: {}".format(
+                    traceback.format_exc()
+                )
+            )
         design.computeAll()
         raise
 
@@ -1338,6 +1489,7 @@ def _update_connection_set(
         insert=insert,
         screw=screw,
         head_seat_offset_mm=seat_offset_mm,
+        head_seat_reference=head_seat_reference,
         head_shape=head_shape,
         insert_clearance_depth_mm=insert_clearance_depth_mm,
         hole_diameter_tolerance_mm=hole_diameter_tolerance_mm,
@@ -1710,6 +1862,7 @@ def _dialog_validation_message(
         library.insert(_selected_dropdown_id(insert_dropdown, library.inserts))
         library.screw(_selected_dropdown_id(screw_dropdown, library.screws))
         _seat_offset_mm(inputs)
+        _selected_head_seat_reference(inputs)
         _insert_clearance_depth_mm(inputs)
         _selected_hole_diameter_tolerance_mm(inputs)
         _selected_head_shape(inputs)
@@ -1821,6 +1974,12 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
         _select_head_shape(
             adsk.core.DropDownCommandInput.cast(inputs.itemById("head_shape")),
             record.get("headShape", "cap"),
+        )
+        _select_head_seat_reference(
+            adsk.core.DropDownCommandInput.cast(
+                inputs.itemById("head_seat_reference")
+            ),
+            record.get("headSeatReference", "entry"),
         )
         _select_hole_diameter_tolerance(
             adsk.core.DropDownCommandInput.cast(
@@ -2007,6 +2166,7 @@ def _run_dialog_operation(inputs, records_by_label, library, selection_cache=Non
         _selected_head_shape(inputs),
         _insert_clearance_depth_mm(inputs),
         _selected_hole_diameter_tolerance_mm(inputs),
+        _selected_head_seat_reference(inputs),
     )
 
 
@@ -2323,9 +2483,20 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
             )
             head_shape.listItems.add("Button Head", False)
             head_shape.listItems.add("Cap Head", True)
+            head_seat_reference = inputs.addDropDownCommandInput(
+                "head_seat_reference",
+                "Head Seat Position Reference",
+                adsk.core.DropDownStyles.TextListDropDownStyle,
+            )
+            head_seat_reference.listItems.add("From Screw Entry Face", False)
+            head_seat_reference.listItems.add("From Screw Exit Face", True)
+            head_seat_reference.tooltip = "Choose the face from which the head-seat distance is measured"
+            head_seat_reference.tooltipDescription = (
+                "Entry Face measures from the outside screw-entry surface. Exit Face measures the material thickness between the screw head seat and the screw body's exit surface."
+            )
             inputs.addValueInput(
                 "head_seat_offset",
-                "Head Seat Distance from Screw Entry Face",
+                "Head Seat Distance",
                 "mm",
                 adsk.core.ValueInput.createByString("3 mm"),
             )

@@ -22,7 +22,10 @@ Insert Connections then creates and keeps aligned:
 - a Button Head or Cap Head clearance pocket.
 
 The head-seat surface does not need to exist. The add-in creates it at the
-selected **Head Seat Distance from Screw Entry Face**. With automatic face
+selected **Head Seat Distance** from either the Screw Entry Face or the Screw
+Exit Face. The Exit Face option is the default because it directly controls the
+remaining material thickness between the screw head seat and the body exit.
+With automatic face
 detection enabled, you only select the screw-entry face; Fusion finds the
 matching opposing planar face when the geometry is unambiguous.
 
@@ -75,10 +78,15 @@ Disable **Auto-detect Insert Face** when the geometry is unusual or ambiguous. T
 For Create New, select:
 
 - **Insert Entry Face**: the outside face where the heat-set threaded insert is installed;
-- **Screw Entry Face**: the face where the screw leaves the screw-side body and continues toward the insert body; and
+- **Screw Entry Face**: the outside face from which the screw enters the screw-side body; and
 - **Locations**: one or more sketch points defining the connection axes. In the normal workflow this is the sketch-host face used above.
 
-For Edit Existing, select the managed Connection Set and change its Thread Size, Threaded Insert Profile, Insert Hole Diameter Tolerance, Screw Profile, Head Shape, Head Seat Distance, or Additional Insert Clearance Depth. The original faces and points are reused.
+For Edit Existing, select the managed Connection Set and change its Thread Size, Threaded Insert Profile, Insert Hole Diameter Tolerance, Screw Profile, Head Shape, Head Seat Position Reference, Head Seat Distance, or Additional Insert Clearance Depth. The original faces and points are reused.
+
+**Head Seat Position Reference** controls what the distance means. **From Screw
+Exit Face** measures the material thickness between the screw head seat and the
+face where the screw leaves the screw-side body. **From Screw Entry Face** keeps
+the original behavior and measures inward from the outside screw-entry surface.
 
 **Preview** is available for both actions and is off by default. During preview, the two affected bodies use a temporary 35% opacity override so internal cuts are easier to inspect. The original opacity is restored when preview is disabled or the dialog closes. Orphaned metadata is excluded from Edit Existing when its timeline group or managed features no longer exist.
 

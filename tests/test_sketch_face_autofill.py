@@ -163,6 +163,46 @@ class SketchFaceAutofillTests(unittest.TestCase):
         self.assertIs(values["insert_face"].selected, candidate)
         self.assertEqual(detect.call_args.kwargs["max_gap_mm"], 0.5)
 
+    def test_parameter_validation_reuses_the_cached_auto_detected_face(self):
+        class _Bool:
+            def __init__(self, value):
+                self.value = value
+
+        class _Selection:
+            def __init__(self, face=None):
+                self.selected = face
+                self.selectionCount = 1 if face else 0
+
+            def selection(self, _index):
+                return types.SimpleNamespace(entity=self.selected)
+
+        component = types.SimpleNamespace()
+        screw_face = _Face("screw")
+        screw_face.body = types.SimpleNamespace(parentComponent=component)
+        candidate = _Face("candidate")
+        candidate.body = types.SimpleNamespace(parentComponent=component)
+        values = {
+            "auto_detect_insert_face": _Bool(True),
+            "auto_fill_screw_face": _Bool(False),
+            "auto_insert_face_tolerance": types.SimpleNamespace(value=0.02),
+            "screw_exit_face": _Selection(screw_face),
+            "insert_face": _Selection(candidate),
+        }
+        inputs = types.SimpleNamespace(itemById=values.get)
+        cache = {"insert_face": {"entity": candidate, "token": "candidate"}}
+        with unittest.mock.patch.object(
+            self.module,
+            "_auto_detect_insert_face",
+            side_effect=AssertionError("auto-detection should be cached"),
+        ):
+            insert_face, selected_screw_face, auto_detect = (
+                self.module._selected_create_faces(inputs, [_Point(_Sketch(screw_face))], cache)
+            )
+
+        self.assertIs(insert_face, candidate)
+        self.assertIs(selected_screw_face, screw_face)
+        self.assertTrue(auto_detect)
+
 
 if __name__ == "__main__":
     unittest.main()

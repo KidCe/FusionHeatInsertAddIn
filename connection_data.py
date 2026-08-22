@@ -39,7 +39,7 @@ def parameter_specs(
         raise ValueError("Insert and screw thread sizes must match in the MVP.")
     if head_seat_offset_mm <= 0:
         raise ValueError(
-            "Head seat distance from the Screw Entry Face must be greater than zero."
+            "Head seat distance must be greater than zero."
         )
     if insert_clearance_depth_mm < 0:
         raise ValueError("Additional insert clearance depth cannot be negative.")
@@ -90,6 +90,7 @@ def make_record(
     source_point_tokens: list[str],
     timeline_group_name: str,
     hole_diameter_tolerance_mm: float = 0.0,
+    head_seat_reference: str = "entry",
 ) -> Dict[str, Any]:
     if location_count < 1:
         raise ValueError("A Connection Set must contain at least one location.")
@@ -108,6 +109,7 @@ def make_record(
         "insertClearanceDepthMm": float(insert_clearance_depth_mm),
         "holeDiameterToleranceMm": float(hole_diameter_tolerance_mm),
         "headSeatOffsetMm": float(head_seat_offset_mm),
+        "headSeatReference": head_seat_reference,
         "locationCount": int(location_count),
         "parameterNames": dict(parameter_names),
         "featureTokens": dict(feature_tokens),
@@ -130,6 +132,7 @@ def update_record(
     insert_clearance_depth_mm: float,
     timeline_group_name: str,
     hole_diameter_tolerance_mm: float = 0.0,
+    head_seat_reference: str = "entry",
 ) -> Dict[str, Any]:
     result = deepcopy(record)
     result["updatedWithVersion"] = addin_version
@@ -141,6 +144,7 @@ def update_record(
     result["insertClearanceDepthMm"] = float(insert_clearance_depth_mm)
     result["holeDiameterToleranceMm"] = float(hole_diameter_tolerance_mm)
     result["headSeatOffsetMm"] = float(head_seat_offset_mm)
+    result["headSeatReference"] = head_seat_reference
     result["timelineGroupName"] = timeline_group_name
     return result
 

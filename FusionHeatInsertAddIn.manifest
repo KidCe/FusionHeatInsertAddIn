@@ -4,7 +4,7 @@
   "id": "FusionHeatInsertAddIn",
   "author": "Threaded Insert Connections",
   "description": "Create and update paired heat-set threaded insert and screw geometry from an editable hardware library.",
-  "version": "0.5.11",
+  "version": "0.5.12",
   "runOnStartup": true,
   "supportedOS": "windows|mac"
 }
