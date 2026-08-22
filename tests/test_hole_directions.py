@@ -15,6 +15,51 @@ class _ValueInput:
         return expression
 
 
+class _Vector:
+    def __init__(self, x, y, z):
+        self.x = x
+        self.y = y
+        self.z = z
+
+    def normalize(self):
+        length = (self.x**2 + self.y**2 + self.z**2) ** 0.5
+        if not length:
+            return False
+        self.x /= length
+        self.y /= length
+        self.z /= length
+        return True
+
+    def dotProduct(self, other):
+        return self.x * other.x + self.y * other.y + self.z * other.z
+
+
+class _Point:
+    def __init__(self, x, y, z):
+        self.x = x
+        self.y = y
+        self.z = z
+
+    def vectorTo(self, other):
+        return _Vector(other.x - self.x, other.y - self.y, other.z - self.z)
+
+
+class _Plane:
+    def __init__(self):
+        self.normal = _Vector(0, 0, 1)
+        self.origin = _Point(0, 0, 1)
+
+
+class _ConstructionPlane:
+    def __init__(self):
+        self.geometry = _Plane()
+
+
+class _Face:
+    def __init__(self):
+        self.pointOnFace = _Point(0, 0, 0)
+
+
 class _ExtentDirections:
     NegativeExtentDirection = "negative"
     PositiveExtentDirection = "positive"
@@ -66,7 +111,7 @@ class _FakeComponent:
 
 
 class HoleDirectionTests(unittest.TestCase):
-    def test_both_screw_side_holes_use_the_flipped_positive_direction(self):
+    def test_screw_clearance_goes_inward_but_head_pocket_goes_toward_outer_face(self):
         adsk = types.ModuleType("adsk")
         core = types.ModuleType("adsk.core")
         fusion = types.ModuleType("adsk.fusion")
@@ -74,6 +119,7 @@ class HoleDirectionTests(unittest.TestCase):
         core.InputChangedEventHandler = _Handler
         core.CommandCreatedEventHandler = _Handler
         core.ValueInput = _ValueInput
+        core.Plane = types.SimpleNamespace(cast=lambda value: value)
         fusion.ExtentDirections = _ExtentDirections
         adsk.core = core
         adsk.fusion = fusion
@@ -106,11 +152,13 @@ class HoleDirectionTests(unittest.TestCase):
                 },
                 connection_id="test",
                 created=[],
+                head_seat_plane=_ConstructionPlane(),
+                screw_face=_Face(),
             )
 
             self.assertEqual(
                 component.features.holeFeatures.directions,
-                {"screwClearance": "positive", "headClearance": "positive"},
+                {"screwClearance": "positive", "headClearance": "negative"},
             )
         finally:
             sys.modules.pop("FusionHeatInsertAddIn", None)

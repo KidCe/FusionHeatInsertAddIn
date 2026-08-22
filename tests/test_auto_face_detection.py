@@ -39,8 +39,9 @@ class _Point:
 
 
 class _Plane:
-    def __init__(self, normal):
+    def __init__(self, normal, origin):
         self.normal = normal
+        self.origin = origin
 
 
 class _Evaluator:
@@ -53,6 +54,8 @@ class _Evaluator:
         )
 
     def getParameterAtPoint(self, point):
+        if abs(point.z - self.face.pointOnFace.z) > 1e-7:
+            return False, None
         return True, point
 
     def isParameterOnFace(self, point):
@@ -64,7 +67,7 @@ class _Face:
         self.body = body
         self.pointOnFace = _Point(0.5, 0.5, z)
         self.normal = _Vector(*normal)
-        self.geometry = _Plane(_Vector(*normal))
+        self.geometry = _Plane(_Vector(*normal), _Point(0.0, 0.0, z))
         self.evaluator = _Evaluator(self)
         self.bounds = bounds
 
@@ -102,6 +105,9 @@ class AutoFaceDetectionTests(unittest.TestCase):
         core.CommandCreatedEventHandler = _Handler
         core.SurfaceEvaluator = types.SimpleNamespace(cast=lambda evaluator: evaluator)
         core.Plane = types.SimpleNamespace(cast=lambda geometry: geometry)
+        core.Point3D = types.SimpleNamespace(
+            create=lambda x, y, z: _Point(x, y, z)
+        )
         fusion.BRepFace = types.SimpleNamespace(cast=lambda face: face)
         adsk.core = core
         adsk.fusion = fusion

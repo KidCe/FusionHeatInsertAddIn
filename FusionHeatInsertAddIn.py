@@ -49,7 +49,7 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.5.0"
+ADDIN_VERSION = "0.5.1"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
 LEGACY_COMMAND_IDS = (
@@ -227,14 +227,66 @@ def _points_project_inside_face(
     evaluator = adsk.core.SurfaceEvaluator.cast(face.evaluator)
     if not evaluator:
         return False
+    try:
+        plane = _plane_from_face(face)
+        normal = plane.normal
+        if not normal.normalize():
+            return False
+    except ConnectionSetError:
+        return False
     for point in points:
         world_point = getattr(point, "worldGeometry", None)
         if not world_point:
             return False
-        success, parameter = evaluator.getParameterAtPoint(world_point)
+        # A sketch point on the Screw Entry Face is intentionally separated
+        # from the candidate Insert Entry Face by the small body gap. Project
+        # it onto the candidate plane before asking Fusion for face parameters;
+        # passing the original off-surface point is not reliable across Fusion
+        # surface evaluators.
+        offset = plane.origin.vectorTo(world_point).dotProduct(normal)
+        projected = adsk.core.Point3D.create(
+            world_point.x - normal.x * offset,
+            world_point.y - normal.y * offset,
+            world_point.z - normal.z * offset,
+        )
+        success, parameter = evaluator.getParameterAtPoint(projected)
         if not success or not evaluator.isParameterOnFace(parameter):
             return False
     return True
+
+
+def _head_clearance_extent_direction(head_seat_plane, screw_face):
+    plane = adsk.core.Plane.cast(head_seat_plane.geometry)
+    if not plane:
+        raise ConnectionSetError("Fusion could not determine the head-seat plane direction.")
+    normal = plane.normal
+    if not normal.normalize():
+        raise ConnectionSetError("Fusion could not normalize the head-seat plane direction.")
+    toward_outer_face = plane.origin.vectorTo(screw_face.pointOnFace)
+    dot = normal.dotProduct(toward_outer_face)
+    if abs(dot) <= GEOMETRY_TOLERANCE_CM:
+        raise ConnectionSetError("Fusion could not determine the outward head-clearance direction.")
+    return (
+        adsk.fusion.ExtentDirections.PositiveExtentDirection
+        if dot > 0
+        else adsk.fusion.ExtentDirections.NegativeExtentDirection
+    )
+
+
+def _head_seat_offset_expression(screw_face, parameter_name: str) -> str:
+    """Return a signed offset that always moves the seat plane into the body."""
+    face_plane = _plane_from_face(screw_face)
+    geometry_normal = face_plane.normal
+    outward_normal = _face_normal(screw_face)
+    if not geometry_normal.normalize():
+        raise ConnectionSetError("Fusion could not normalize the screw-entry face plane.")
+    alignment = geometry_normal.dotProduct(outward_normal)
+    if abs(alignment) <= NORMAL_PARALLEL_TOLERANCE:
+        raise ConnectionSetError("Fusion could not determine the screw-entry face orientation.")
+    # setByOffset follows the geometric plane normal, which can be opposite
+    # to the B-Rep face's outward normal. Move opposite the outward normal so
+    # the seat plane stays inside the screw body in either case.
+    return "{}{}".format("-" if alignment > 0 else "", parameter_name)
 
 
 def _auto_detect_insert_face(
@@ -458,6 +510,8 @@ def _create_holes(
     names: Dict[str, str],
     connection_id: str,
     created: List[Any],
+    head_seat_plane: Any = None,
+    screw_face: Any = None,
 ) -> Dict[str, Any]:
     holes = component.features.holeFeatures
 
@@ -495,7 +549,12 @@ def _create_holes(
     created.append(screw_hole)
 
     head_input = holes.createSimpleInput(_value(names["headClearanceDiameter"]))
-    if not head_input.setAllExtent(adsk.fusion.ExtentDirections.PositiveExtentDirection):
+    head_direction = (
+        _head_clearance_extent_direction(head_seat_plane, screw_face)
+        if head_seat_plane and screw_face
+        else adsk.fusion.ExtentDirections.NegativeExtentDirection
+    )
+    if not head_input.setAllExtent(head_direction):
         raise RuntimeError("Fusion rejected the head-clearance extent.")
     if not head_input.setPositionBySketchPoints(seat_points):
         raise RuntimeError("Fusion rejected the head-seat locations.")
@@ -729,7 +788,12 @@ def _create_connection_set(inputs) -> Dict[str, Any]:
 
         plane_input = component.constructionPlanes.createInput()
         if not plane_input.setByOffset(
-            screw_face, _value("-{}".format(parameter_names["headSeatOffset"]))
+            screw_face,
+            _value(
+                _head_seat_offset_expression(
+                    screw_face, parameter_names["headSeatOffset"]
+                )
+            ),
         ):
             raise RuntimeError("Fusion rejected the head-seat offset plane.")
         seat_plane = component.constructionPlanes.add(plane_input)
@@ -758,6 +822,8 @@ def _create_connection_set(inputs) -> Dict[str, Any]:
             parameter_names,
             connection_id,
             created,
+            head_seat_plane=seat_plane,
+            screw_face=screw_face,
         )
         insert_sketch.isVisible = False
         screw_sketch.isVisible = False
