@@ -49,7 +49,7 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.5.6"
+ADDIN_VERSION = "0.5.7"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
 LEGACY_COMMAND_IDS = (
@@ -69,8 +69,10 @@ HOLE_DIAMETER_TOLERANCES = {
     "+0.15 mm": 0.15,
     "+0.20 mm": 0.20,
 }
-AUTO_INSERT_FACE_MAX_GAP_MM = 0.2
-AUTO_INSERT_FACE_MAX_GAP_CM = AUTO_INSERT_FACE_MAX_GAP_MM / 10.0
+AUTO_INSERT_FACE_DEFAULT_GAP_MM = 0.2
+AUTO_INSERT_FACE_TOLERANCES_MM = (0.2, 0.5, 1.0, 2.0, 5.0)
+POINT_FACE_TOLERANCE_CM = 1e-4
+USER_SETTINGS_FILE = "FusionHeatInsertAddIn/settings.json"
 GEOMETRY_TOLERANCE_CM = 1e-5
 NORMAL_PARALLEL_TOLERANCE = 1e-5
 HANDLERS: List[Any] = []
@@ -96,6 +98,43 @@ def _log(message: str) -> None:
 
 def _library() -> HardwareLibrary:
     return HardwareLibrary.from_path(LIBRARY_PATH)
+
+
+def _user_settings_path() -> str:
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return os.path.join(appdata, USER_SETTINGS_FILE)
+    return os.path.join(
+        os.path.expanduser("~"), ".fusionheatinsertaddin", "settings.json"
+    )
+
+
+def _saved_auto_insert_face_tolerance_mm() -> float:
+    try:
+        with open(_user_settings_path(), "r", encoding="utf-8") as settings_file:
+            settings = json.load(settings_file)
+        value = float(settings.get("autoInsertFaceToleranceMm"))
+        if value in AUTO_INSERT_FACE_TOLERANCES_MM:
+            return value
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        pass
+    return AUTO_INSERT_FACE_DEFAULT_GAP_MM
+
+
+def _save_auto_insert_face_tolerance_mm(value: float) -> None:
+    if value not in AUTO_INSERT_FACE_TOLERANCES_MM:
+        return
+    path = _user_settings_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as settings_file:
+            json.dump(
+                {"autoInsertFaceToleranceMm": value},
+                settings_file,
+                indent=2,
+            )
+    except OSError:
+        _log("Could not save user settings: {}".format(traceback.format_exc()))
 
 
 def _active_design() -> adsk.fusion.Design:
@@ -161,7 +200,7 @@ def _selected_entity(inputs, input_id: str, cast, selection_cache=None) -> Any:
     selected = selection.selection(0)
     raw_entity = selected.entity if selected else None
     entity = cast(raw_entity)
-    if entity:
+    if entity and getattr(entity, "isValid", True):
         _remember_selection(selection_cache, input_id, entity)
         return entity
     entity = _resolve_cached_selection(selection_cache, input_id, cast)
@@ -208,7 +247,7 @@ def _selected_points(inputs, selection_cache=None) -> List[adsk.fusion.SketchPoi
         selected = selection.selection(index)
         raw_entity = selected.entity if selected else None
         point = adsk.fusion.SketchPoint.cast(raw_entity)
-        if point:
+        if point and getattr(point, "isValid", True):
             _remember_selection(selection_cache, key, point)
         else:
             point = _resolve_cached_selection(
@@ -307,9 +346,27 @@ def _points_are_on_face(
     face: adsk.fusion.BRepFace,
     points: List[adsk.fusion.SketchPoint],
 ) -> bool:
+    evaluator = adsk.core.SurfaceEvaluator.cast(face.evaluator)
+    plane = _plane_from_face(face)
+    normal = plane.normal
+    if not normal.normalize() or not evaluator:
+        return False
     for point in points:
         world_point = getattr(point, "worldGeometry", None)
-        if not world_point or not face.isPointOnFace(world_point):
+        if not world_point:
+            return False
+        if face.isPointOnFace(world_point):
+            continue
+        offset = plane.origin.vectorTo(world_point).dotProduct(normal)
+        if abs(offset) > POINT_FACE_TOLERANCE_CM:
+            return False
+        projected = adsk.core.Point3D.create(
+            world_point.x - normal.x * offset,
+            world_point.y - normal.y * offset,
+            world_point.z - normal.z * offset,
+        )
+        success, parameter = evaluator.getParameterAtPoint(projected)
+        if not success or not evaluator.isParameterOnFace(parameter):
             return False
     return True
 
@@ -382,10 +439,14 @@ def _auto_detect_insert_face(
     screw_face: adsk.fusion.BRepFace,
     points: List[adsk.fusion.SketchPoint],
     component: adsk.fusion.Component,
+    max_gap_mm: float = AUTO_INSERT_FACE_DEFAULT_GAP_MM,
 ) -> adsk.fusion.BRepFace:
+    if max_gap_mm <= 0:
+        raise ConnectionSetError("Automatic Insert Face tolerance must be greater than 0 mm.")
+    max_gap_cm = max_gap_mm / 10.0
     screw_body = screw_face.body
     screw_normal = _face_normal(screw_face)
-    screw_point = screw_face.pointOnFace
+    screw_plane = _plane_from_face(screw_face)
     candidates = []
 
     bodies = component.bRepBodies
@@ -413,10 +474,17 @@ def _auto_detect_insert_face(
             if screw_normal.dotProduct(candidate_normal) > -1.0 + NORMAL_PARALLEL_TOLERANCE:
                 continue
 
-            gap_cm = abs(
-                screw_point.vectorTo(candidate.pointOnFace).dotProduct(screw_normal)
-            )
-            if gap_cm > AUTO_INSERT_FACE_MAX_GAP_CM + GEOMETRY_TOLERANCE_CM:
+            # Move from the Screw Entry Face into the screw body, opposite its
+            # outward normal. A candidate on the outward side is not the insert
+            # face, even when its absolute plane distance is small.
+            candidate_plane = _plane_from_face(candidate)
+            signed_gap_cm = screw_plane.origin.vectorTo(
+                candidate_plane.origin
+            ).dotProduct(screw_normal)
+            if signed_gap_cm > GEOMETRY_TOLERANCE_CM:
+                continue
+            gap_cm = max(0.0, -signed_gap_cm)
+            if gap_cm > max_gap_cm + GEOMETRY_TOLERANCE_CM:
                 continue
             if not _points_project_inside_face(candidate, points):
                 continue
@@ -425,8 +493,9 @@ def _auto_detect_insert_face(
     if not candidates:
         raise ConnectionSetError(
             "Automatic Insert Face detection found no unique opposing planar face "
-            "within 0.2 mm that covers all selected locations. Disable Auto-detect "
+            "within {:.3g} mm that covers all selected locations. Disable Auto-detect "
             "Insert Face and select the Insert Entry Face manually."
+            .format(max_gap_mm)
         )
 
     candidates.sort(key=lambda item: item[0])
@@ -444,6 +513,30 @@ def _auto_detect_insert_face_enabled(inputs) -> bool:
         inputs.itemById("auto_detect_insert_face")
     )
     return bool(toggle and toggle.value)
+
+
+def _auto_insert_face_tolerance_label(value: float) -> str:
+    return "{:.2f} mm".format(value)
+
+
+def _selected_auto_insert_face_tolerance_mm(inputs) -> float:
+    dropdown = adsk.core.DropDownCommandInput.cast(
+        inputs.itemById("auto_insert_face_tolerance")
+    )
+    item = dropdown.selectedItem if dropdown else None
+    if not item:
+        return AUTO_INSERT_FACE_DEFAULT_GAP_MM
+    try:
+        value = float(item.name.replace(" mm", ""))
+    except (AttributeError, TypeError, ValueError):
+        raise ConnectionSetError("Select a valid Auto-detect Insert Face tolerance.")
+    if value not in AUTO_INSERT_FACE_TOLERANCES_MM:
+        raise ConnectionSetError("Select a valid Auto-detect Insert Face tolerance.")
+    return value
+
+
+def _select_auto_insert_face_tolerance(dropdown, value: float) -> None:
+    _select_dropdown_name(dropdown, _auto_insert_face_tolerance_label(value))
 
 
 def _auto_fill_screw_face_enabled(inputs) -> bool:
@@ -522,7 +615,12 @@ def _selected_create_faces(
             raise ConnectionSetError(
                 "The selected Screw Entry Face does not belong to a component."
             )
-        insert_face = _auto_detect_insert_face(screw_face, points, component)
+        insert_face = _auto_detect_insert_face(
+            screw_face,
+            points,
+            component,
+            max_gap_mm=_selected_auto_insert_face_tolerance_mm(inputs),
+        )
     else:
         insert_face = _selected_entity(
             inputs, "insert_face", adsk.fusion.BRepFace.cast, selection_cache
@@ -558,9 +656,9 @@ def _validate_geometry(
         raise ConnectionSetError("Insert Entry and Screw-to-Insert faces must be parallel.")
     if not _points_are_on_face(screw_face, points):
         raise ConnectionSetError(
-            "Every location must be a sketch point on the selected Screw Entry Face. "
-            "Select the face hosting the location sketch, or clear the face and choose "
-            "the matching face manually."
+            "Fusion accepted the Locations as SketchPoints, but at least one point "
+            "does not lie on the selected Screw Entry Face. Select the face hosting "
+            "the location sketch, or choose the matching face manually."
         )
 
     source_sketch = points[0].parentSketch
@@ -1542,6 +1640,9 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
         auto_detect = adsk.core.BoolValueCommandInput.cast(
             inputs.itemById("auto_detect_insert_face")
         )
+        auto_detect_tolerance = adsk.core.DropDownCommandInput.cast(
+            inputs.itemById("auto_insert_face_tolerance")
+        )
         insert_face = adsk.core.SelectionCommandInput.cast(inputs.itemById("insert_face"))
         screw_face = adsk.core.SelectionCommandInput.cast(inputs.itemById("screw_exit_face"))
         locations = adsk.core.SelectionCommandInput.cast(inputs.itemById("locations"))
@@ -1550,6 +1651,10 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
         )
         if auto_detect:
             auto_detect.isVisible = not editing
+        if auto_detect_tolerance:
+            auto_detect_tolerance.isVisible = not editing and bool(
+                auto_detect and auto_detect.value
+            )
         if auto_fill:
             auto_fill.isVisible = not editing
         insert_face.isVisible = not editing and not bool(auto_detect and auto_detect.value)
@@ -1655,8 +1760,8 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
         elif _auto_detect_insert_face_enabled(inputs):
             action = (
                 "Select Locations first; the Screw Entry Face can be taken from their "
-                "sketch and the Insert Entry Face is detected within 0.2 mm."
-            )
+                "sketch and the Insert Entry Face is detected within {:.3g} mm."
+            ).format(_selected_auto_insert_face_tolerance_mm(inputs))
         elif _auto_fill_screw_face_enabled(inputs):
             action = (
                 "Select Locations first; the Screw Entry Face is filled from their "
@@ -1704,6 +1809,13 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
     def notify(self, args):
         try:
             self.dialog_state["preview_error"] = None
+            if args.input.id == "auto_insert_face_tolerance":
+                try:
+                    _save_auto_insert_face_tolerance_mm(
+                        _selected_auto_insert_face_tolerance_mm(args.inputs)
+                    )
+                except ConnectionSetError:
+                    pass
             if args.input.id == "screw_exit_face":
                 screw_face = adsk.core.SelectionCommandInput.cast(
                     args.inputs.itemById("screw_exit_face")
@@ -1971,7 +2083,7 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
             inputs.addTextBoxCommandInput(
                 "intro",
                 "",
-                "Create or edit a paired insert connection. In Create mode, select Locations first. The sketch hosting those points can fill the Screw Entry Face automatically; clear or disable that option to choose another native planar face manually. Fusion can also find the opposing Insert Entry Face on another solid body within 0.2 mm. Native faces from one active component are required; occurrence/proxy faces are not supported.",
+                "Create or edit a paired insert connection. In Create mode, select Locations first. The sketch hosting those points can fill the Screw Entry Face automatically; clear or disable that option to choose another native planar face manually. Fusion can also find the opposing Insert Entry Face on another solid body within the configured tolerance. Native faces from one active component are required; occurrence/proxy faces are not supported.",
                 4,
                 True,
             )
@@ -2026,6 +2138,19 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
                 "auto_detect_insert_face", "Auto-detect Insert Face", True, "", True
             )
             auto_detect.isVisible = True
+            auto_detect_tolerance = inputs.addDropDownCommandInput(
+                "auto_insert_face_tolerance",
+                "Auto-detect Gap Tolerance",
+                adsk.core.DropDownStyles.TextListDropDownStyle,
+            )
+            for tolerance_mm in AUTO_INSERT_FACE_TOLERANCES_MM:
+                auto_detect_tolerance.listItems.add(
+                    _auto_insert_face_tolerance_label(tolerance_mm), False
+                )
+            _select_auto_insert_face_tolerance(
+                auto_detect_tolerance, _saved_auto_insert_face_tolerance_mm()
+            )
+            auto_detect_tolerance.isVisible = True
             insert_face = inputs.addSelectionInput(
                 "insert_face",
                 "Insert Entry Face (Manual)",

@@ -48,7 +48,9 @@ repeatable screw-and-insert alignment.
 
 It currently does not infer curved or angled interfaces, arbitrary multi-body
 stackups, or broken references after major model changes. Automatic face
-detection is limited to a unique opposing planar face within 0.2 mm; manual
+detection is limited to a unique opposing planar face in the direction into the
+Screw body. Its default gap tolerance is 0.2 mm, with larger values available
+in the dialog; the last selected value is remembered for the next start. Manual
 face selection is available when the geometry is unusual.
 
 ## Command and selections
@@ -64,7 +66,7 @@ For the default **Create New** workflow, create a sketch on the face where the s
 - **Screw Entry Face**: review the suggestion. Clear it to turn off the suggestion
   for this dialog, then select another matching planar face manually.
 
-With **Auto-detect Insert Face** enabled, Fusion finds the opposing planar face on another solid body in the same component. The candidate must face the Screw Entry Face, cover every selected location, and be no more than **0.2 mm** away. If multiple candidates are equally close or no unique candidate is found, the command stops safely and explains how to switch to manual selection.
+With **Auto-detect Insert Face** enabled, Fusion finds the opposing planar face on another solid body in the same component. The candidate must face the Screw Entry Face, lie in the direction into the Screw body, cover every selected location, and be within the selected **Auto-detect Gap Tolerance**. If multiple candidates are equally close or no unique candidate is found, the command stops safely and explains how to switch to manual selection.
 
 Disable **Auto-detect Insert Face** when the geometry is unusual or ambiguous. The manual fallback then exposes the original two-face workflow: select **Insert Entry Face** and **Screw Entry Face** explicitly. The location points must still lie on the selected Screw Entry Face.
 

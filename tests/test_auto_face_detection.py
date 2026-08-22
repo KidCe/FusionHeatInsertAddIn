@@ -1,7 +1,10 @@
 import importlib
+import os
 import sys
+import tempfile
 import types
 import unittest
+from unittest.mock import patch
 
 
 class _Handler:
@@ -144,7 +147,7 @@ class AutoFaceDetectionTests(unittest.TestCase):
         return component, screw_face, points, insert_bodies
 
     def test_selects_unique_opposing_face_within_point_two_mm(self):
-        component, screw_face, points, insert_bodies = self._geometry([0.015, 0.03])
+        component, screw_face, points, insert_bodies = self._geometry([-0.015, -0.03])
 
         result = self.module._auto_detect_insert_face(screw_face, points, component)
 
@@ -158,16 +161,47 @@ class AutoFaceDetectionTests(unittest.TestCase):
         self.assertIs(result.body, insert_bodies[0])
 
     def test_rejects_ambiguous_equally_close_faces(self):
-        component, screw_face, points, _ = self._geometry([0.015, 0.015])
+        component, screw_face, points, _ = self._geometry([-0.015, -0.015])
 
         with self.assertRaisesRegex(ValueError, "multiple equally close"):
             self.module._auto_detect_insert_face(screw_face, points, component)
 
     def test_rejects_faces_beyond_point_two_mm(self):
-        component, screw_face, points, _ = self._geometry([0.021])
+        component, screw_face, points, _ = self._geometry([-0.021])
 
         with self.assertRaisesRegex(ValueError, "within 0.2 mm"):
             self.module._auto_detect_insert_face(screw_face, points, component)
+
+    def test_ignores_a_candidate_on_the_outward_side_of_the_screw_face(self):
+        component, screw_face, points, _ = self._geometry([0.015])
+
+        with self.assertRaisesRegex(ValueError, "no unique opposing planar face"):
+            self.module._auto_detect_insert_face(screw_face, points, component)
+
+    def test_custom_gap_tolerance_can_include_a_larger_plane_distance(self):
+        component, screw_face, points, insert_bodies = self._geometry([-0.03])
+
+        result = self.module._auto_detect_insert_face(
+            screw_face, points, component, max_gap_mm=0.4
+        )
+
+        self.assertIs(result.body, insert_bodies[0])
+
+    def test_points_with_small_plane_rounding_offset_are_still_on_face(self):
+        body = _Body(types.SimpleNamespace())
+        face = _Face(body, 0.0, (0, 0, 1))
+        points = [types.SimpleNamespace(worldGeometry=_Point(0.5, 0.5, 5e-5))]
+
+        self.assertTrue(self.module._points_are_on_face(face, points))
+
+    def test_auto_detect_tolerance_is_persisted_between_dialog_starts(self):
+        with tempfile.TemporaryDirectory() as settings_root:
+            with patch.dict(os.environ, {"APPDATA": settings_root}, clear=False):
+                self.module._save_auto_insert_face_tolerance_mm(1.0)
+
+                self.assertEqual(
+                    self.module._saved_auto_insert_face_tolerance_mm(), 1.0
+                )
 
 
 if __name__ == "__main__":
