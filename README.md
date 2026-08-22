@@ -4,6 +4,9 @@ Create matching screw holes and heat-set threaded-insert pockets in Autodesk Fus
 a few selections. The add-in is designed for 3D-printed parts where two bodies
 need to be joined with a screw and a brass heat-set threaded insert.
 
+> **Current development version:** `0.5.16`<br>
+> The version is also shown in the Fusion dialog after the add-in has loaded.
+
 ## See it first
 
 > 🎬 **Demo placeholder** — Add a short GIF or 30–60 second screen recording
@@ -38,10 +41,28 @@ matching opposing planar face when the geometry is unambiguous.
    Face when it is based on a native planar face. Then choose matching insert and
    screw profiles, set the optional hole tolerance, preview, and create.
 
-During development, use **Solid > Create > Reload Threaded Insert Connections**
-after changing the repository files. The button reloads this add-in from disk
-without opening Fusion's **Scripts and Add-Ins** dialog. It does not reload other
-add-ins.
+During development, use this short update loop:
+
+1. Change the files in the repository.
+2. Run **Install Fusion Add-in.cmd** to copy the changed runtime files into
+   Fusion's Add-ins directory.
+3. Use **Solid > Create > Reload Threaded Insert Connections**.
+4. Check the version shown in the dialog.
+
+The reload command reloads this add-in from the installed Add-ins directory
+without opening Fusion's **Scripts and Add-Ins** dialog. It does not download
+from GitHub, watch the repository, or reload other add-ins. If the repository
+files were not installed first, the button will simply reload the previous
+installed copy.
+
+The reload is intended for normal Python and library-data iterations. It
+recreates this add-in's commands, event handlers, and dialog, so the current
+dialog state, selections, and temporary preview are discarded. Existing
+Fusion model geometry is not deleted. Use Fusion's native **Utilities > Scripts
+and Add-Ins** dialog when the add-in is stopped, the reload command is missing,
+the startup code has a syntax/import error, or the manifest, add-in ID, folder,
+or startup structure changed. The native dialog is also required to reload
+other add-ins or to recover from a failed in-process reload.
 
 The default workflow is intentionally short. Detailed manual selection,
 editing, profile authoring, automatic-face-detection rules, and limitations are
