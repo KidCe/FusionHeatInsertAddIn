@@ -33,6 +33,7 @@ class SelectionDiagnosticsTests(unittest.TestCase):
         core.CommandEventHandler = _Handler
         core.InputChangedEventHandler = _Handler
         core.CommandCreatedEventHandler = _Handler
+        core.CustomEventHandler = _Handler
         core.SelectionCommandInput = types.SimpleNamespace(cast=lambda value: value)
         fusion.BRepFace = types.SimpleNamespace(cast=lambda value: None)
         adsk.core = core
@@ -65,6 +66,7 @@ class SelectionDiagnosticsTests(unittest.TestCase):
         core.CommandEventHandler = _Handler
         core.InputChangedEventHandler = _Handler
         core.CommandCreatedEventHandler = _Handler
+        core.CustomEventHandler = _Handler
         core.SelectionCommandInput = types.SimpleNamespace(cast=lambda value: value)
         replacement = types.SimpleNamespace(objectType="adsk::fusion::BRepFace")
         design = types.SimpleNamespace(findEntityByToken=lambda token: [replacement])
@@ -105,6 +107,7 @@ class SelectionDiagnosticsTests(unittest.TestCase):
         core.CommandEventHandler = _Handler
         core.InputChangedEventHandler = _Handler
         core.CommandCreatedEventHandler = _Handler
+        core.CustomEventHandler = _Handler
         core.SelectionCommandInput = types.SimpleNamespace(cast=lambda value: value)
         replacement = types.SimpleNamespace(
             objectType="adsk::fusion::SketchPoint",

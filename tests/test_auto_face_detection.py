@@ -106,6 +106,7 @@ class AutoFaceDetectionTests(unittest.TestCase):
         core.CommandEventHandler = _Handler
         core.InputChangedEventHandler = _Handler
         core.CommandCreatedEventHandler = _Handler
+        core.CustomEventHandler = _Handler
         core.SurfaceEvaluator = types.SimpleNamespace(cast=lambda evaluator: evaluator)
         core.Plane = types.SimpleNamespace(cast=lambda geometry: geometry)
         core.Point3D = types.SimpleNamespace(

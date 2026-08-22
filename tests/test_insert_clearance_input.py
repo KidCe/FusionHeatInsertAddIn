@@ -23,6 +23,7 @@ class InsertClearanceInputTests(unittest.TestCase):
         core.CommandEventHandler = _Handler
         core.InputChangedEventHandler = _Handler
         core.CommandCreatedEventHandler = _Handler
+        core.CustomEventHandler = _Handler
         core.ValueCommandInput = _Cast
         core.BoolValueCommandInput = _Cast
         core.DropDownCommandInput = _Cast
@@ -54,6 +55,7 @@ class InsertClearanceInputTests(unittest.TestCase):
         core.CommandEventHandler = _Handler
         core.InputChangedEventHandler = _Handler
         core.CommandCreatedEventHandler = _Handler
+        core.CustomEventHandler = _Handler
         core.ValueCommandInput = _Cast
         core.BoolValueCommandInput = _Cast
         core.DropDownCommandInput = _Cast

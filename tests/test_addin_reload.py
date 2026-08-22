@@ -26,6 +26,7 @@ class AddInReloadTests(unittest.TestCase):
             core.CommandEventHandler = Handler
             core.InputChangedEventHandler = Handler
             core.CommandCreatedEventHandler = Handler
+            core.CustomEventHandler = Handler
             adsk.core = core
             adsk.fusion = fusion
             sys.modules.update({"adsk": adsk, "adsk.core": core, "adsk.fusion": fusion})
@@ -40,6 +41,58 @@ class AddInReloadTests(unittest.TestCase):
             hardware_library.HardwareLibrary.from_path = stale_parser
             module = importlib.import_module("FusionHeatInsertAddIn")
             assert module._library().schema_version == 1
+            """
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_reload_button_queues_fusion_custom_event(self):
+        script = textwrap.dedent(
+            """
+            import importlib
+            import sys
+            import types
+
+            class Handler:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+            adsk = types.ModuleType("adsk")
+            core = types.ModuleType("adsk.core")
+            fusion = types.ModuleType("adsk.fusion")
+            core.CommandEventHandler = Handler
+            core.InputChangedEventHandler = Handler
+            core.CommandCreatedEventHandler = Handler
+            core.CustomEventHandler = Handler
+            adsk.core = core
+            adsk.fusion = fusion
+            sys.modules.update({"adsk": adsk, "adsk.core": core, "adsk.fusion": fusion})
+
+            module = importlib.import_module("FusionHeatInsertAddIn")
+
+            class FakeApplication:
+                def __init__(self):
+                    self.events = []
+
+                def fireCustomEvent(self, event_id):
+                    self.events.append(event_id)
+                    return True
+
+            class FakeUi:
+                statusMessage = ""
+
+            app = FakeApplication()
+            module.APP = app
+            module.UI = FakeUi()
+            module.ReloadAddInCommandExecuteHandler().notify(None)
+            assert app.events == [module.RELOAD_EVENT_ID]
+            assert module.UI.statusMessage.startswith("Reloading")
             """
         )
         result = subprocess.run(

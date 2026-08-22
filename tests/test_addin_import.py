@@ -17,6 +17,7 @@ class AddInImportTests(unittest.TestCase):
         core.CommandEventHandler = _Handler
         core.InputChangedEventHandler = _Handler
         core.CommandCreatedEventHandler = _Handler
+        core.CustomEventHandler = _Handler
         adsk.core = core
         adsk.fusion = fusion
 
@@ -29,7 +30,7 @@ class AddInImportTests(unittest.TestCase):
         try:
             sys.modules.pop("FusionHeatInsertAddIn", None)
             module = importlib.import_module("FusionHeatInsertAddIn")
-            self.assertEqual(module.ADDIN_VERSION, "0.5.13")
+            self.assertEqual(module.ADDIN_VERSION, "0.5.14")
             self.assertTrue(callable(module.run))
             self.assertTrue(callable(module.stop))
         finally:

@@ -50,9 +50,11 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.5.13"
+ADDIN_VERSION = "0.5.14"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
+RELOAD_COMMAND_ID = "FusionHeatInsertReloadAddIn"
+RELOAD_EVENT_ID = "FusionHeatInsertAddIn.Reload"
 LEGACY_COMMAND_IDS = (
     "FusionHeatInsertCreateConnectionSet",
     "FusionHeatInsertEditConnectionSet",
@@ -87,6 +89,60 @@ UI = None
 
 class ConnectionSetError(ValueError):
     """Expected user-correctable problem."""
+
+
+class ReloadAddInCommandExecuteHandler(adsk.core.CommandEventHandler):
+    """Queue a self-reload after Fusion finishes the current toolbar command."""
+
+    def __init__(self):
+        super().__init__()
+
+    def notify(self, args):
+        try:
+            if _request_reload():
+                if UI:
+                    UI.statusMessage = "Reloading Threaded Insert Connections..."
+            elif UI:
+                UI.statusMessage = "Threaded Insert Connections reload could not be queued."
+        except Exception:
+            _log("Reload request failed: {}".format(traceback.format_exc()))
+            if UI:
+                UI.messageBox(
+                    "Threaded Insert Connections could not be reloaded.\n\n{}".format(
+                        traceback.format_exc()
+                    )
+                )
+
+
+class ReloadAddInCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
+    """Attach the execute handler each time Fusion creates the reload command."""
+
+    def __init__(self):
+        super().__init__()
+
+    def notify(self, args):
+        command = args.command
+        execute_handler = ReloadAddInCommandExecuteHandler()
+        command.execute.add(execute_handler)
+        HANDLERS.append(execute_handler)
+
+
+class ReloadAddInCustomEventHandler(adsk.core.CustomEventHandler):
+    """Reload the module from disk when Fusion is idle after the button command."""
+
+    def __init__(self):
+        super().__init__()
+
+    def notify(self, args):
+        try:
+            _reload_module_from_disk()
+        except Exception:
+            message = "Threaded Insert Connections could not be reloaded.\n\n{}".format(
+                traceback.format_exc()
+            )
+            _log(message)
+            if UI:
+                UI.messageBox(message)
 
 
 def _log(message: str) -> None:
@@ -2628,11 +2684,11 @@ def _remove_ui() -> None:
         panel = UI.allToolbarPanels.itemById(panel_id)
         if not panel:
             continue
-        for command_id in (COMMAND_ID,) + LEGACY_COMMAND_IDS:
+        for command_id in (COMMAND_ID, RELOAD_COMMAND_ID) + LEGACY_COMMAND_IDS:
             control = panel.controls.itemById(command_id)
             if control:
                 control.deleteMe()
-    for command_id in (COMMAND_ID,) + LEGACY_COMMAND_IDS:
+    for command_id in (COMMAND_ID, RELOAD_COMMAND_ID) + LEGACY_COMMAND_IDS:
         definition = UI.commandDefinitions.itemById(command_id)
         if definition:
             definition.deleteMe()
@@ -2647,6 +2703,33 @@ def _add_control(definition) -> None:
         control.isPromotedByDefault = True
 
 
+def _request_reload() -> bool:
+    """Queue the reload event; Fusion handles it once the active command is idle."""
+    if not APP:
+        return False
+    return bool(APP.fireCustomEvent(RELOAD_EVENT_ID))
+
+
+def _unregister_reload_event() -> None:
+    if not APP:
+        return
+    try:
+        APP.unregisterCustomEvent(RELOAD_EVENT_ID)
+    except Exception:
+        # The event may not have been registered when Fusion stops the add-in.
+        pass
+
+
+def _reload_module_from_disk() -> None:
+    """Stop this module, reload its source, and start the fresh module object."""
+    module = sys.modules.get(__name__)
+    if module is None:
+        raise RuntimeError("The add-in module is not available for reload.")
+    stop({"reload": True})
+    reloaded_module = importlib.reload(module)
+    reloaded_module.run({"reload": True})
+
+
 def run(context):
     global APP, UI
     try:
@@ -2654,6 +2737,14 @@ def run(context):
         UI = APP.userInterface
         _library()
         _remove_ui()
+        _unregister_reload_event()
+
+        reload_event = APP.registerCustomEvent(RELOAD_EVENT_ID)
+        if not reload_event:
+            raise RuntimeError("Fusion could not register the add-in reload event.")
+        reload_handler = ReloadAddInCustomEventHandler()
+        reload_event.add(reload_handler)
+        HANDLERS.append(reload_handler)
 
         definition = UI.commandDefinitions.addButtonDefinition(
             COMMAND_ID,
@@ -2664,6 +2755,16 @@ def run(context):
         definition.commandCreated.add(handler)
         HANDLERS.append(handler)
         _add_control(definition)
+
+        reload_definition = UI.commandDefinitions.addButtonDefinition(
+            RELOAD_COMMAND_ID,
+            "Reload Threaded Insert Connections",
+            "Reload this add-in from its current files without opening Scripts and Add-Ins.",
+        )
+        reload_created_handler = ReloadAddInCommandCreatedHandler()
+        reload_definition.commandCreated.add(reload_created_handler)
+        HANDLERS.append(reload_created_handler)
+        _add_control(reload_definition)
         _log("Add-in {} started.".format(ADDIN_VERSION))
     except Exception:
         message = "Threaded Insert Connections failed to start.\n\n{}".format(
@@ -2678,5 +2779,6 @@ def stop(context):
     try:
         _remove_ui()
     finally:
+        _unregister_reload_event()
         HANDLERS[:] = []
         _log("Add-in stopped.")

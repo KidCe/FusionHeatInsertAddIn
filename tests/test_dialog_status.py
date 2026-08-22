@@ -17,6 +17,7 @@ class DialogStatusTests(unittest.TestCase):
         core.CommandEventHandler = _Handler
         core.InputChangedEventHandler = _Handler
         core.CommandCreatedEventHandler = _Handler
+        core.CustomEventHandler = _Handler
         adsk.core = core
         adsk.fusion = fusion
         self.old_modules = {

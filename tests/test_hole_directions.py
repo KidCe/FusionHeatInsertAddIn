@@ -127,6 +127,7 @@ class HoleDirectionTests(unittest.TestCase):
         core.CommandEventHandler = _Handler
         core.InputChangedEventHandler = _Handler
         core.CommandCreatedEventHandler = _Handler
+        core.CustomEventHandler = _Handler
         core.ValueInput = _ValueInput
         core.Plane = types.SimpleNamespace(cast=lambda value: value)
         core.SurfaceEvaluator = types.SimpleNamespace(cast=lambda value: value)

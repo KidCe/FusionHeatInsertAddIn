@@ -45,6 +45,7 @@ class SketchFaceAutofillTests(unittest.TestCase):
         core.CommandEventHandler = _Handler
         core.InputChangedEventHandler = _Handler
         core.CommandCreatedEventHandler = _Handler
+        core.CustomEventHandler = _Handler
         core.ValueCommandInput = _Cast
         core.BoolValueCommandInput = types.SimpleNamespace(cast=lambda value: value)
         core.SelectionCommandInput = types.SimpleNamespace(cast=lambda value: value)

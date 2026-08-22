@@ -27,6 +27,7 @@ class RecordFilteringTests(unittest.TestCase):
         core.CommandEventHandler = _Handler
         core.InputChangedEventHandler = _Handler
         core.CommandCreatedEventHandler = _Handler
+        core.CustomEventHandler = _Handler
         adsk.core = core
         adsk.fusion = fusion
         old_modules = {name: sys.modules.get(name) for name in ("adsk", "adsk.core", "adsk.fusion")}

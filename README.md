@@ -38,6 +38,11 @@ matching opposing planar face when the geometry is unambiguous.
    Face when it is based on a native planar face. Then choose matching insert and
    screw profiles, set the optional hole tolerance, preview, and create.
 
+During development, use **Solid > Create > Reload Threaded Insert Connections**
+after changing the repository files. The button reloads this add-in from disk
+without opening Fusion's **Scripts and Add-Ins** dialog. It does not reload other
+add-ins.
+
 The default workflow is intentionally short. Detailed manual selection,
 editing, profile authoring, automatic-face-detection rules, and limitations are
 documented below.
@@ -171,7 +176,10 @@ The profile editor remains in the repository. Double-click **Open Hardware Libra
 
 The Python loopback server remains available for development, but it is not needed for normal users.
 
-The manifest enables startup loading. If Fusion is already running, restart Fusion or reload **FusionHeatInsertAddIn** from **Utilities > Scripts and Add-Ins** after replacing its files.
+The manifest enables startup loading. If Fusion is already running, use **Solid >
+Create > Reload Threaded Insert Connections** after replacing the files. The
+native **Utilities > Scripts and Add-Ins** dialog remains the fallback if the
+add-in is not currently running or if its startup code cannot load.
 
 ## Validation boundary
 
