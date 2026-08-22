@@ -49,7 +49,7 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.5.8"
+ADDIN_VERSION = "0.5.9"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
 LEGACY_COMMAND_IDS = (
@@ -484,6 +484,42 @@ def _auto_detect_insert_face(
     screw_body = screw_face.body
     screw_normal = _face_normal(screw_face)
     screw_plane = _plane_from_face(screw_face)
+    inward = adsk.core.Vector3D.create(
+        -screw_normal.x, -screw_normal.y, -screw_normal.z
+    )
+
+    # First find where the ray leaves the Screw body. The configured tolerance
+    # applies only after this exit, not to the complete Screw body thickness.
+    exit_candidates = []
+    screw_faces = screw_body.faces
+    for face_index in range(screw_faces.count):
+        exit_face = screw_faces.item(face_index)
+        if not exit_face or _faces_represent_same_entity(exit_face, screw_face):
+            continue
+        try:
+            exit_plane = _plane_from_face(exit_face)
+            exit_normal = _face_normal(exit_face)
+        except ConnectionSetError:
+            continue
+        if screw_normal.dotProduct(exit_normal) > -1.0 + NORMAL_PARALLEL_TOLERANCE:
+            continue
+        exit_distance_cm = screw_plane.origin.vectorTo(
+            exit_plane.origin
+        ).dotProduct(inward)
+        if exit_distance_cm <= GEOMETRY_TOLERANCE_CM:
+            continue
+        if not _points_project_inside_face(exit_face, points):
+            continue
+        exit_candidates.append((exit_distance_cm, exit_face))
+
+    if not exit_candidates:
+        raise ConnectionSetError(
+            "Automatic Insert Face detection could not find the next planar exit "
+            "face of the Screw body along the selected Screw Entry Face direction. "
+            "Select the Screw Entry Face and locations on the outer screw surface."
+        )
+    exit_candidates.sort(key=lambda item: item[0])
+    screw_exit_distance_cm, _screw_exit_face = exit_candidates[0]
     candidates = []
 
     bodies = component.bRepBodies
@@ -506,21 +542,18 @@ def _auto_detect_insert_face(
             except ConnectionSetError:
                 continue
 
-            # Solid-face normals point outward. The insert entry face must face
-            # back toward the screw body, so the normals must be anti-parallel.
-            if screw_normal.dotProduct(candidate_normal) > -1.0 + NORMAL_PARALLEL_TOLERANCE:
+            # The Insert Entry Face faces the Screw body. Its outward normal is
+            # therefore parallel to the outward normal of the Screw Entry Face.
+            if screw_normal.dotProduct(candidate_normal) < 1.0 - NORMAL_PARALLEL_TOLERANCE:
                 continue
 
-            # Move from the Screw Entry Face into the screw body, opposite its
-            # outward normal. A candidate on the outward side is not the insert
-            # face, even when its absolute plane distance is small.
             candidate_plane = _plane_from_face(candidate)
-            signed_gap_cm = screw_plane.origin.vectorTo(
+            candidate_distance_cm = screw_plane.origin.vectorTo(
                 candidate_plane.origin
-            ).dotProduct(screw_normal)
-            if signed_gap_cm > GEOMETRY_TOLERANCE_CM:
+            ).dotProduct(inward)
+            if candidate_distance_cm < screw_exit_distance_cm - GEOMETRY_TOLERANCE_CM:
                 continue
-            gap_cm = max(0.0, -signed_gap_cm)
+            gap_cm = max(0.0, candidate_distance_cm - screw_exit_distance_cm)
             if gap_cm > max_gap_cm + GEOMETRY_TOLERANCE_CM:
                 continue
             if not _points_project_inside_face(candidate, points):

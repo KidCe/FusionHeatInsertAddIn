@@ -111,6 +111,9 @@ class AutoFaceDetectionTests(unittest.TestCase):
         core.Point3D = types.SimpleNamespace(
             create=lambda x, y, z: _Point(x, y, z)
         )
+        core.Vector3D = types.SimpleNamespace(
+            create=lambda x, y, z: _Vector(x, y, z)
+        )
         fusion.BRepFace = types.SimpleNamespace(cast=lambda face: face)
         adsk.core = core
         adsk.fusion = fusion
@@ -136,9 +139,10 @@ class AutoFaceDetectionTests(unittest.TestCase):
         screw_body = _Body(component)
         insert_bodies = [_Body(component) for _ in candidates]
         screw_face = _Face(screw_body, 0.0, (0, 0, 1))
-        screw_body.faces = _Collection([screw_face])
+        screw_exit_face = _Face(screw_body, -0.5, (0, 0, -1))
+        screw_body.faces = _Collection([screw_face, screw_exit_face])
         for body, candidate in zip(insert_bodies, candidates):
-            body.faces = _Collection([_Face(body, candidate, (0, 0, -1))])
+            body.faces = _Collection([_Face(body, candidate, (0, 0, 1))])
         component.bRepBodies = _Collection([screw_body] + insert_bodies)
         points = [
             types.SimpleNamespace(worldGeometry=_Point(0.5, 0.5, 0.0)),
@@ -147,27 +151,27 @@ class AutoFaceDetectionTests(unittest.TestCase):
         return component, screw_face, points, insert_bodies
 
     def test_selects_unique_opposing_face_within_point_two_mm(self):
-        component, screw_face, points, insert_bodies = self._geometry([-0.015, -0.03])
+        component, screw_face, points, insert_bodies = self._geometry([-0.515, -0.53])
 
         result = self.module._auto_detect_insert_face(screw_face, points, component)
 
         self.assertIs(result.body, insert_bodies[0])
 
     def test_selects_unique_opposing_face_on_the_other_side_of_screw_face(self):
-        component, screw_face, points, insert_bodies = self._geometry([-0.015, -0.03])
+        component, screw_face, points, insert_bodies = self._geometry([-0.515, 0.515])
 
         result = self.module._auto_detect_insert_face(screw_face, points, component)
 
         self.assertIs(result.body, insert_bodies[0])
 
     def test_rejects_ambiguous_equally_close_faces(self):
-        component, screw_face, points, _ = self._geometry([-0.015, -0.015])
+        component, screw_face, points, _ = self._geometry([-0.515, -0.515])
 
         with self.assertRaisesRegex(ValueError, "multiple equally close"):
             self.module._auto_detect_insert_face(screw_face, points, component)
 
     def test_rejects_faces_beyond_point_two_mm(self):
-        component, screw_face, points, _ = self._geometry([-0.021])
+        component, screw_face, points, _ = self._geometry([-0.521])
 
         with self.assertRaisesRegex(ValueError, "within 0.2 mm"):
             self.module._auto_detect_insert_face(screw_face, points, component)
@@ -179,7 +183,7 @@ class AutoFaceDetectionTests(unittest.TestCase):
             self.module._auto_detect_insert_face(screw_face, points, component)
 
     def test_custom_gap_tolerance_can_include_a_larger_plane_distance(self):
-        component, screw_face, points, insert_bodies = self._geometry([-0.03])
+        component, screw_face, points, insert_bodies = self._geometry([-0.53])
 
         result = self.module._auto_detect_insert_face(
             screw_face, points, component, max_gap_mm=0.4
