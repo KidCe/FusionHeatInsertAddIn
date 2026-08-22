@@ -49,7 +49,7 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.5.1"
+ADDIN_VERSION = "0.5.2"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
 LEGACY_COMMAND_IDS = (
@@ -695,7 +695,11 @@ def _selected_hole_diameter_tolerance_mm(inputs) -> float:
         inputs.itemById("hole_diameter_tolerance")
     )
     item = dropdown.selectedItem if dropdown else None
-    if not item or item.name not in HOLE_DIAMETER_TOLERANCES:
+    if not item:
+        # Keep older or partially loaded dialogs usable. The profile value is
+        # the safe default when the optional tolerance input is unavailable.
+        return 0.0
+    if item.name not in HOLE_DIAMETER_TOLERANCES:
         raise ConnectionSetError("Select an Insert Hole Diameter Tolerance.")
     return HOLE_DIAMETER_TOLERANCES[item.name]
 
@@ -1713,6 +1717,13 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
                 _profiles_for_thread(library.inserts, initial_thread)
             ):
                 insert_dd.listItems.add(profile.display_name, index == 0)
+            tolerance_dd = inputs.addDropDownCommandInput(
+                "hole_diameter_tolerance",
+                "Insert Hole Diameter Tolerance",
+                adsk.core.DropDownStyles.TextListDropDownStyle,
+            )
+            for index, label in enumerate(HOLE_DIAMETER_TOLERANCES):
+                tolerance_dd.listItems.add(label, index == 0)
             screw_dd = inputs.addDropDownCommandInput(
                 "screw_profile", "Screw Profile", adsk.core.DropDownStyles.TextListDropDownStyle
             )

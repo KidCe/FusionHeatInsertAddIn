@@ -29,7 +29,7 @@ class AddInImportTests(unittest.TestCase):
         try:
             sys.modules.pop("FusionHeatInsertAddIn", None)
             module = importlib.import_module("FusionHeatInsertAddIn")
-            self.assertEqual(module.ADDIN_VERSION, "0.5.1")
+            self.assertEqual(module.ADDIN_VERSION, "0.5.2")
             self.assertTrue(callable(module.run))
             self.assertTrue(callable(module.stop))
         finally:
