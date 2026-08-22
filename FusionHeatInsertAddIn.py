@@ -50,7 +50,7 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.5.14"
+ADDIN_VERSION = "0.5.15"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
 RELOAD_COMMAND_ID = "FusionHeatInsertReloadAddIn"
@@ -2720,13 +2720,34 @@ def _unregister_reload_event() -> None:
         pass
 
 
+def _execute_module_source(module, source_path: str, source_code=None):
+    """Execute the add-in source in its existing Fusion-owned module object.
+
+    Fusion runs Python add-ins as a special ``__main__...`` module without an
+    import specification.  ``importlib.reload`` therefore cannot reload the
+    main module, while executing the compiled source in the existing module
+    keeps Fusion's module identity and callback references valid.
+    """
+    if source_code is None:
+        with open(source_path, "r", encoding="utf-8") as source_file:
+            source_code = compile(source_file.read(), source_path, "exec")
+    module.__file__ = source_path
+    module.__package__ = ""
+    module.__spec__ = None
+    exec(source_code, module.__dict__)
+    return module
+
+
 def _reload_module_from_disk() -> None:
-    """Stop this module, reload its source, and start the fresh module object."""
+    """Stop this module, execute its source, and start the fresh definitions."""
     module = sys.modules.get(__name__)
     if module is None:
         raise RuntimeError("The add-in module is not available for reload.")
+    source_path = os.path.join(ADDIN_DIRECTORY, "FusionHeatInsertAddIn.py")
+    with open(source_path, "r", encoding="utf-8") as source_file:
+        source_code = compile(source_file.read(), source_path, "exec")
     stop({"reload": True})
-    reloaded_module = importlib.reload(module)
+    reloaded_module = _execute_module_source(module, source_path, source_code)
     reloaded_module.run({"reload": True})
 
 
