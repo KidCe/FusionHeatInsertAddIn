@@ -58,6 +58,11 @@ class _ConstructionPlane:
 class _Face:
     def __init__(self):
         self.pointOnFace = _Point(0, 0, 0)
+        self.normal = _Vector(0, 0, 1)
+        self.evaluator = self
+
+    def getNormalAtPoint(self, point):
+        return True, _Vector(self.normal.x, self.normal.y, self.normal.z)
 
 
 class _ExtentDirections:
@@ -80,6 +85,10 @@ class _FakeHoleInput:
         return True
 
     def setPositionBySketchPoints(self, points):
+        return True
+
+    def setOneSideToExtent(self, to_entity, match_shape, direction_hint):
+        self.directions["headToFace"] = (to_entity, match_shape, direction_hint)
         return True
 
 
@@ -120,6 +129,10 @@ class HoleDirectionTests(unittest.TestCase):
         core.CommandCreatedEventHandler = _Handler
         core.ValueInput = _ValueInput
         core.Plane = types.SimpleNamespace(cast=lambda value: value)
+        core.SurfaceEvaluator = types.SimpleNamespace(cast=lambda value: value)
+        core.Vector3D = types.SimpleNamespace(
+            create=lambda x, y, z: _Vector(x, y, z)
+        )
         fusion.ExtentDirections = _ExtentDirections
         adsk.core = core
         adsk.fusion = fusion
@@ -134,6 +147,7 @@ class HoleDirectionTests(unittest.TestCase):
             sys.modules.pop("FusionHeatInsertAddIn", None)
             module = importlib.import_module("FusionHeatInsertAddIn")
             component = _FakeComponent()
+            screw_face = _Face()
             module._create_holes(
                 component=component,
                 insert_body=object(),
@@ -153,13 +167,15 @@ class HoleDirectionTests(unittest.TestCase):
                 connection_id="test",
                 created=[],
                 head_seat_plane=_ConstructionPlane(),
-                screw_face=_Face(),
+                screw_face=screw_face,
             )
 
-            self.assertEqual(
-                component.features.holeFeatures.directions,
-                {"screwClearance": "positive", "headClearance": "negative"},
-            )
+            directions = component.features.holeFeatures.directions
+            self.assertEqual(directions["screwClearance"], "positive")
+            self.assertNotIn("headClearance", directions)
+            head_to_face = directions["headToFace"]
+            self.assertIs(head_to_face[0], screw_face)
+            self.assertFalse(head_to_face[1])
         finally:
             sys.modules.pop("FusionHeatInsertAddIn", None)
             for name, previous in old_modules.items():

@@ -49,7 +49,7 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.5.2"
+ADDIN_VERSION = "0.5.3"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
 LEGACY_COMMAND_IDS = (
@@ -112,7 +112,11 @@ def _active_design() -> adsk.fusion.Design:
 def _selected_entity(inputs, input_id: str, cast) -> Any:
     selection = adsk.core.SelectionCommandInput.cast(inputs.itemById(input_id))
     if not selection or selection.selectionCount != 1:
-        raise ConnectionSetError("Complete every required face selection.")
+        labels = {
+            "insert_face": "Select one Insert Entry Face.",
+            "screw_exit_face": "Select one Screw Entry Face.",
+        }
+        raise ConnectionSetError(labels.get(input_id, "Complete every required selection."))
     entity = cast(selection.selection(0).entity)
     if not entity:
         raise ConnectionSetError("A selected entity has the wrong type.")
@@ -255,22 +259,17 @@ def _points_project_inside_face(
     return True
 
 
-def _head_clearance_extent_direction(head_seat_plane, screw_face):
+def _head_clearance_direction_hint(head_seat_plane, screw_face):
     plane = adsk.core.Plane.cast(head_seat_plane.geometry)
     if not plane:
         raise ConnectionSetError("Fusion could not determine the head-seat plane direction.")
     normal = plane.normal
     if not normal.normalize():
         raise ConnectionSetError("Fusion could not normalize the head-seat plane direction.")
-    toward_outer_face = plane.origin.vectorTo(screw_face.pointOnFace)
-    dot = normal.dotProduct(toward_outer_face)
-    if abs(dot) <= GEOMETRY_TOLERANCE_CM:
-        raise ConnectionSetError("Fusion could not determine the outward head-clearance direction.")
-    return (
-        adsk.fusion.ExtentDirections.PositiveExtentDirection
-        if dot > 0
-        else adsk.fusion.ExtentDirections.NegativeExtentDirection
-    )
+    outward = _face_normal(screw_face)
+    if normal.dotProduct(outward) < 0:
+        normal = adsk.core.Vector3D.create(-normal.x, -normal.y, -normal.z)
+    return normal
 
 
 def _head_seat_offset_expression(screw_face, parameter_name: str) -> str:
@@ -324,9 +323,9 @@ def _auto_detect_insert_face(
             if screw_normal.dotProduct(candidate_normal) > -1.0 + NORMAL_PARALLEL_TOLERANCE:
                 continue
 
-            gap_cm = screw_point.vectorTo(candidate.pointOnFace).dotProduct(screw_normal)
-            if gap_cm < -GEOMETRY_TOLERANCE_CM:
-                continue
+            gap_cm = abs(
+                screw_point.vectorTo(candidate.pointOnFace).dotProduct(screw_normal)
+            )
             if gap_cm > AUTO_INSERT_FACE_MAX_GAP_CM + GEOMETRY_TOLERANCE_CM:
                 continue
             if not _points_project_inside_face(candidate, points):
@@ -549,15 +548,16 @@ def _create_holes(
     created.append(screw_hole)
 
     head_input = holes.createSimpleInput(_value(names["headClearanceDiameter"]))
-    head_direction = (
-        _head_clearance_extent_direction(head_seat_plane, screw_face)
-        if head_seat_plane and screw_face
-        else adsk.fusion.ExtentDirections.NegativeExtentDirection
-    )
-    if not head_input.setAllExtent(head_direction):
-        raise RuntimeError("Fusion rejected the head-clearance extent.")
     if not head_input.setPositionBySketchPoints(seat_points):
         raise RuntimeError("Fusion rejected the head-seat locations.")
+    if not head_seat_plane or not screw_face:
+        raise RuntimeError("Fusion could not determine the head-clearance target face.")
+    if not head_input.setOneSideToExtent(
+        screw_face,
+        False,
+        _head_clearance_direction_hint(head_seat_plane, screw_face),
+    ):
+        raise RuntimeError("Fusion rejected the head-clearance extent to the Screw Entry Face.")
     head_input.participantBodies = [screw_body]
     head_hole = holes.add(head_input)
     if not head_hole:
@@ -1315,15 +1315,59 @@ def _dialog_mode(inputs) -> str:
     return "edit" if item and item.name == "Edit Existing" else "create"
 
 
+def _dialog_validation_message(inputs, records_by_label, library) -> Optional[str]:
+    try:
+        if _dialog_mode(inputs) == "edit":
+            dropdown = adsk.core.DropDownCommandInput.cast(
+                inputs.itemById("connection_set")
+            )
+            item = dropdown.selectedItem if dropdown else None
+            if not item or item.name not in records_by_label:
+                return "Select a managed Connection Set to edit."
+        else:
+            points = _selected_points(inputs)
+            insert_face, screw_face, auto_detect = _selected_create_faces(inputs, points)
+            _validate_geometry(
+                insert_face,
+                screw_face,
+                points,
+                auto_detect_insert_face=auto_detect,
+            )
+
+        insert_dropdown = adsk.core.DropDownCommandInput.cast(
+            inputs.itemById("insert_profile")
+        )
+        screw_dropdown = adsk.core.DropDownCommandInput.cast(
+            inputs.itemById("screw_profile")
+        )
+        library.insert(_selected_dropdown_id(insert_dropdown, library.inserts))
+        library.screw(_selected_dropdown_id(screw_dropdown, library.screws))
+        _seat_offset_mm(inputs)
+        _insert_clearance_depth_mm(inputs)
+        _selected_hole_diameter_tolerance_mm(inputs)
+        _selected_head_shape(inputs)
+        return None
+    except (ConnectionSetError, HardwareLibraryError, ValueError) as error:
+        return str(error)
+
+
+def _set_dialog_status(inputs, message: str) -> None:
+    status = adsk.core.TextBoxCommandInput.cast(inputs.itemById("dialog_status"))
+    if status:
+        status.text = message
+
+
 class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
     def __init__(
         self,
         records_by_label: Dict[str, Dict[str, Any]],
         library: HardwareLibrary,
+        dialog_state: Dict[str, Any],
     ):
         super().__init__()
         self.records_by_label = records_by_label
         self.library = library
+        self.dialog_state = dialog_state
         self.syncing = False
 
     def _selected_record(self, inputs) -> Optional[Dict[str, Any]]:
@@ -1475,11 +1519,15 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
             elif load_record or filter_profiles:
                 self._filter_profiles(inputs)
             self._update_summary(inputs)
+            message = _dialog_validation_message(inputs, self.records_by_label, self.library)
+            if message:
+                _set_dialog_status(inputs, "Not ready — {}".format(message))
         finally:
             self.syncing = False
 
     def notify(self, args):
         try:
+            self.dialog_state["preview_error"] = None
             self.sync(
                 args.inputs,
                 load_record=args.input.id in ("dialog_mode", "connection_set"),
@@ -1487,6 +1535,35 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
             )
         except Exception:
             _log("Connection dialog update failed: {}".format(traceback.format_exc()))
+
+
+class ConnectionDialogValidateInputsHandler(
+    getattr(adsk.core, "ValidateInputsEventHandler", adsk.core.CommandEventHandler)
+):
+    def __init__(self, records_by_label, library, dialog_state):
+        super().__init__()
+        self.records_by_label = records_by_label
+        self.library = library
+        self.dialog_state = dialog_state
+
+    def notify(self, args):
+        inputs = args.inputs
+        try:
+            message = self.dialog_state.get("preview_error")
+            if message:
+                message = "Preview is not available — {} Correct the inputs before clicking OK.".format(
+                    message
+                )
+            else:
+                message = _dialog_validation_message(
+                    inputs, self.records_by_label, self.library
+                )
+        except Exception:
+            message = "Fusion could not validate the current inputs. Check the selections and try again."
+            _log("Connection dialog validation failed: {}".format(traceback.format_exc()))
+        args.areInputsValid = not bool(message)
+        if message:
+            _set_dialog_status(inputs, "Not ready — {}".format(message))
 
 
 def _run_dialog_operation(inputs, records_by_label, library):
@@ -1570,17 +1647,19 @@ class PreviewAppearance:
 
 
 class ConnectionDialogPreviewHandler(adsk.core.CommandEventHandler):
-    def __init__(self, records_by_label, library, appearance):
+    def __init__(self, records_by_label, library, appearance, dialog_state):
         super().__init__()
         self.records_by_label = records_by_label
         self.library = library
         self.appearance = appearance
+        self.dialog_state = dialog_state
 
     def notify(self, args):
         preview = adsk.core.BoolValueCommandInput.cast(
             args.command.commandInputs.itemById("preview")
         )
         if not preview or not preview.value:
+            self.dialog_state["preview_error"] = None
             self.appearance.restore()
             return
         try:
@@ -1588,12 +1667,25 @@ class ConnectionDialogPreviewHandler(adsk.core.CommandEventHandler):
             _run_dialog_operation(
                 args.command.commandInputs, self.records_by_label, self.library
             )
+            self.dialog_state["preview_error"] = None
             args.isValidResult = True
-        except (ConnectionSetError, HardwareLibraryError, ValueError):
+        except (ConnectionSetError, HardwareLibraryError, ValueError) as error:
             self.appearance.restore()
+            self.dialog_state["preview_error"] = str(error)
+            _set_dialog_status(
+                args.command.commandInputs,
+                "Preview unavailable — {} Correct the inputs before clicking OK.".format(
+                    error
+                ),
+            )
             args.isValidResult = False
         except Exception:
             self.appearance.restore()
+            self.dialog_state["preview_error"] = "Fusion could not generate the preview."
+            _set_dialog_status(
+                args.command.commandInputs,
+                "Preview failed — Fusion could not generate the preview. Correct the inputs before clicking OK.",
+            )
             args.isValidResult = False
             _log("Preview failed: {}".format(traceback.format_exc()))
 
@@ -1655,6 +1747,15 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
                 "",
                 "Create or edit a paired insert connection. In automatic mode, select a Screw Entry Face and sketch points on that face; Fusion finds the opposing Insert Entry Face on another solid body within 0.2 mm. Disable automatic detection for manual two-face selection.",
                 4,
+                True,
+            )
+            inputs.addTextBoxCommandInput(
+                "version_info",
+                "",
+                "FusionHeatInsertAddIn version {}. Preview is temporary and OK is disabled until the inputs are valid.".format(
+                    ADDIN_VERSION
+                ),
+                2,
                 True,
             )
             mode = inputs.addDropDownCommandInput(
@@ -1761,19 +1862,32 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
                 True,
             )
 
-            input_handler = ConnectionDialogInputHandler(records_by_label, library)
+            dialog_state = {"preview_error": None}
+            input_handler = ConnectionDialogInputHandler(
+                records_by_label, library, dialog_state
+            )
             preview_appearance = PreviewAppearance(records_by_label)
             preview_handler = ConnectionDialogPreviewHandler(
-                records_by_label, library, preview_appearance
+                records_by_label, library, preview_appearance, dialog_state
+            )
+            validate_handler = ConnectionDialogValidateInputsHandler(
+                records_by_label, library, dialog_state
             )
             destroy_handler = ConnectionDialogDestroyHandler(preview_appearance)
             execute_handler = ConnectionDialogExecuteHandler(records_by_label, library)
             command.inputChanged.add(input_handler)
             command.executePreview.add(preview_handler)
+            command.validateInputs.add(validate_handler)
             command.execute.add(execute_handler)
             command.destroy.add(destroy_handler)
             HANDLERS.extend(
-                (input_handler, preview_handler, execute_handler, destroy_handler)
+                (
+                    input_handler,
+                    preview_handler,
+                    validate_handler,
+                    execute_handler,
+                    destroy_handler,
+                )
             )
             input_handler.sync(inputs)
         except Exception:

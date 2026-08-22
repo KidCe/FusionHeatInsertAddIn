@@ -150,6 +150,13 @@ class AutoFaceDetectionTests(unittest.TestCase):
 
         self.assertIs(result.body, insert_bodies[0])
 
+    def test_selects_unique_opposing_face_on_the_other_side_of_screw_face(self):
+        component, screw_face, points, insert_bodies = self._geometry([-0.015, -0.03])
+
+        result = self.module._auto_detect_insert_face(screw_face, points, component)
+
+        self.assertIs(result.body, insert_bodies[0])
+
     def test_rejects_ambiguous_equally_close_faces(self):
         component, screw_face, points, _ = self._geometry([0.015, 0.015])
 
