@@ -50,7 +50,7 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.5.15"
+ADDIN_VERSION = "0.5.16"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
 RELOAD_COMMAND_ID = "FusionHeatInsertReloadAddIn"
@@ -2233,51 +2233,6 @@ def _run_dialog_operation(inputs, records_by_label, library, selection_cache=Non
     )
 
 
-def _preview_signature(inputs, selection_cache=None):
-    """Return a stable snapshot so duplicate preview events can be skipped."""
-    def selected_name(input_id):
-        input_value = inputs.itemById(input_id)
-        item = getattr(input_value, "selectedItem", None) if input_value else None
-        return getattr(item, "name", None) if item else None
-
-    def scalar(input_id):
-        input_value = inputs.itemById(input_id)
-        value = getattr(input_value, "value", None) if input_value else None
-        if isinstance(value, bool) or value is None:
-            return value
-        try:
-            return round(float(value), 12)
-        except (TypeError, ValueError):
-            return str(value)
-
-    def cached_token(key):
-        cached = (selection_cache or {}).get(key) or {}
-        return cached.get("token") or getattr(cached.get("entity"), "entityToken", "")
-
-    return (
-        selected_name("dialog_mode"),
-        selected_name("connection_set"),
-        selected_name("thread_size"),
-        selected_name("insert_profile"),
-        selected_name("screw_profile"),
-        selected_name("hole_diameter_tolerance"),
-        selected_name("head_shape"),
-        selected_name("head_seat_reference"),
-        scalar("head_seat_offset"),
-        scalar("insert_clearance_depth"),
-        scalar("auto_insert_face_tolerance"),
-        scalar("add_insert_clearance"),
-        scalar("auto_detect_insert_face"),
-        cached_token("screw_exit_face"),
-        cached_token("insert_face"),
-        tuple(
-            cached_token("locations:{}".format(index))
-            for index in range(64)
-            if cached_token("locations:{}".format(index))
-        ),
-    )
-
-
 class PreviewAppearance:
     def __init__(self, records_by_label, selection_cache=None):
         self.records_by_label = records_by_label
@@ -2320,11 +2275,24 @@ class PreviewAppearance:
         return unique
 
     def apply(self, inputs) -> None:
-        self.restore()
-        for body in self._bodies(inputs):
+        bodies = self._bodies(inputs)
+        current_ids = {id(body) for body in bodies}
+        for body_id, (body, opacity) in list(self.original_opacity.items()):
+            if body_id in current_ids:
+                continue
+            try:
+                if body.isValid:
+                    body.opacity = opacity
+            except Exception:
+                pass
+            self.original_opacity.pop(body_id, None)
+        for body in bodies:
             if getattr(body, "isValid", False):
-                self.original_opacity[id(body)] = (body, body.opacity)
-                body.opacity = 0.35
+                body_id = id(body)
+                if body_id not in self.original_opacity:
+                    self.original_opacity[body_id] = (body, body.opacity)
+                if abs(body.opacity - 0.35) > 1e-9:
+                    body.opacity = 0.35
 
     def restore(self) -> None:
         for body, opacity in self.original_opacity.values():
@@ -2350,17 +2318,8 @@ class ConnectionDialogPreviewHandler(adsk.core.CommandEventHandler):
         )
         if not preview or not preview.value:
             self.dialog_state["preview_error"] = None
-            self.dialog_state["last_preview_signature"] = None
             self.appearance.restore()
             return
-        signature = _preview_signature(
-            args.command.commandInputs,
-            self.dialog_state.get("selection_cache"),
-        )
-        if signature == self.dialog_state.get("last_preview_signature"):
-            args.isValidResult = not bool(self.dialog_state.get("preview_error"))
-            return
-        self.dialog_state["last_preview_signature"] = signature
         try:
             self.appearance.apply(args.command.commandInputs)
             _run_dialog_operation(

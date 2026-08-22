@@ -18,6 +18,7 @@ class DialogStatusTests(unittest.TestCase):
         core.InputChangedEventHandler = _Handler
         core.CommandCreatedEventHandler = _Handler
         core.CustomEventHandler = _Handler
+        core.BoolValueCommandInput = types.SimpleNamespace(cast=lambda value: value)
         adsk.core = core
         adsk.fusion = fusion
         self.old_modules = {
@@ -46,20 +47,67 @@ class DialogStatusTests(unittest.TestCase):
             "Not ready — Select Locations.",
         )
 
-    def test_preview_signature_changes_for_real_parameter_changes(self):
-        values = {
-            "head_seat_offset": types.SimpleNamespace(value=0.3),
-            "head_seat_reference": types.SimpleNamespace(
-                selectedItem=types.SimpleNamespace(name="From Screw Exit Face")
-            ),
-        }
-        inputs = types.SimpleNamespace(itemById=values.get)
+    def test_repeated_preview_rebuilds_after_fusion_aborts_previous_transaction(self):
+        class FakeAppearance:
+            def __init__(self):
+                self.geometry_present = False
+                self.apply_count = 0
 
-        first = self.module._preview_signature(inputs, {})
-        values["head_seat_offset"].value = 0.4
-        second = self.module._preview_signature(inputs, {})
+            def apply(self, inputs):
+                self.apply_count += 1
+                self.geometry_present = True
 
-        self.assertNotEqual(first, second)
+            def restore(self):
+                self.geometry_present = False
+
+        class FakeInputs:
+            def __init__(self):
+                self.preview = types.SimpleNamespace(value=True)
+
+            def itemById(self, input_id):
+                return self.preview if input_id == "preview" else None
+
+        inputs = FakeInputs()
+        command = types.SimpleNamespace(commandInputs=inputs)
+        args = types.SimpleNamespace(command=command, isValidResult=False)
+        appearance = FakeAppearance()
+        original_operation = self.module._run_dialog_operation
+        self.module._run_dialog_operation = lambda *args, **kwargs: None
+        try:
+            handler = self.module.ConnectionDialogPreviewHandler(
+                {}, None, appearance, {"selection_cache": {}}
+            )
+            handler.notify(args)
+            appearance.geometry_present = False  # Fusion aborts the prior preview transaction.
+            handler.notify(args)
+            self.assertTrue(appearance.geometry_present)
+            self.assertEqual(appearance.apply_count, 2)
+        finally:
+            self.module._run_dialog_operation = original_operation
+
+    def test_preview_appearance_does_not_toggle_opacity_on_rebuild(self):
+        class FakeBody:
+            isValid = True
+
+            def __init__(self):
+                self._opacity = 1.0
+                self.opacity_changes = []
+
+            @property
+            def opacity(self):
+                return self._opacity
+
+            @opacity.setter
+            def opacity(self, value):
+                self.opacity_changes.append(value)
+                self._opacity = value
+
+        body = FakeBody()
+        appearance = self.module.PreviewAppearance({}, {})
+        appearance._bodies = lambda inputs: [body]
+        appearance.apply(None)
+        appearance.apply(None)
+        self.assertEqual(body.opacity_changes, [0.35])
 
 
 if __name__ == "__main__":
