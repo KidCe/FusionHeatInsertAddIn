@@ -49,7 +49,7 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.5.3"
+ADDIN_VERSION = "0.5.4"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
 LEGACY_COMMAND_IDS = (
@@ -111,15 +111,31 @@ def _active_design() -> adsk.fusion.Design:
 
 def _selected_entity(inputs, input_id: str, cast) -> Any:
     selection = adsk.core.SelectionCommandInput.cast(inputs.itemById(input_id))
+    labels = {
+        "insert_face": "Insert Entry Face (Manual)",
+        "screw_exit_face": "Screw Entry Face",
+    }
+    label = labels.get(input_id, input_id)
     if not selection or selection.selectionCount != 1:
-        labels = {
-            "insert_face": "Select one Insert Entry Face.",
-            "screw_exit_face": "Select one Screw Entry Face.",
-        }
-        raise ConnectionSetError(labels.get(input_id, "Complete every required selection."))
-    entity = cast(selection.selection(0).entity)
+        raise ConnectionSetError("Select exactly one {}.".format(label))
+    raw_entity = selection.selection(0).entity
+    entity = cast(raw_entity)
     if not entity:
-        raise ConnectionSetError("A selected entity has the wrong type.")
+        object_type = getattr(raw_entity, "objectType", type(raw_entity).__name__)
+        if "Proxy" in object_type or getattr(raw_entity, "assemblyContext", None):
+            guidance = (
+                "This is an occurrence/proxy entity. Activate the target component "
+                "and select its native planar face, not a face through an occurrence."
+            )
+        else:
+            guidance = (
+                "Select the planar face itself, not an edge, body, component, or sketch."
+            )
+        raise ConnectionSetError(
+            "{} returned '{}', but a native planar BRepFace is required. {}".format(
+                label, object_type, guidance
+            )
+        )
     return entity
 
 
@@ -131,7 +147,12 @@ def _selected_points(inputs) -> List[adsk.fusion.SketchPoint]:
     for index in range(selection.selectionCount):
         point = adsk.fusion.SketchPoint.cast(selection.selection(index).entity)
         if not point:
-            raise ConnectionSetError("Locations must be sketch points.")
+            raw_entity = selection.selection(index).entity
+            object_type = getattr(raw_entity, "objectType", type(raw_entity).__name__)
+            raise ConnectionSetError(
+                "Locations must be SketchPoints; Fusion returned '{}'. Select a "
+                "sketch point, not a vertex or edge.".format(object_type)
+            )
         points.append(point)
     return points
 
@@ -1707,6 +1728,17 @@ class ConnectionDialogExecuteHandler(adsk.core.CommandEventHandler):
 
     def notify(self, args):
         try:
+            validation_message = _dialog_validation_message(
+                args.command.commandInputs, self.records_by_label, self.library
+            )
+            if validation_message:
+                message = "Not ready — {}".format(validation_message)
+                _set_dialog_status(args.command.commandInputs, message)
+                UI.messageBox(
+                    "Connection Set was not changed.\n\n{}".format(message),
+                    "Heat Insert Connections",
+                )
+                return
             action, record = _run_dialog_operation(
                 args.command.commandInputs, self.records_by_label, self.library
             )
@@ -1745,7 +1777,7 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
             inputs.addTextBoxCommandInput(
                 "intro",
                 "",
-                "Create or edit a paired insert connection. In automatic mode, select a Screw Entry Face and sketch points on that face; Fusion finds the opposing Insert Entry Face on another solid body within 0.2 mm. Disable automatic detection for manual two-face selection.",
+                "Create or edit a paired insert connection. Select native planar faces from bodies in one active component; occurrence/proxy faces are not supported. In automatic mode, select a Screw Entry Face and sketch points on that face; Fusion finds the opposing Insert Entry Face on another solid body within 0.2 mm. Disable automatic detection for manual two-face selection.",
                 4,
                 True,
             )
@@ -1781,14 +1813,14 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
             insert_face = inputs.addSelectionInput(
                 "insert_face",
                 "Insert Entry Face (Manual)",
-                "Select the outward insert entry face when automatic detection is disabled.",
+                "Select the native planar insert entry face when automatic detection is disabled. Do not select a face through an occurrence/proxy.",
             )
             insert_face.addSelectionFilter("PlanarFaces")
             insert_face.setSelectionLimits(1, 1)
             screw_face = inputs.addSelectionInput(
                 "screw_exit_face",
                 "Screw Entry Face",
-                "Select the planar face where the screw is inserted. In automatic mode, locations must be sketch points on this face.",
+                "Select the native planar face where the screw is inserted. In automatic mode, locations must be sketch points on this face. Do not select a face through an occurrence/proxy.",
             )
             screw_face.addSelectionFilter("PlanarFaces")
             screw_face.setSelectionLimits(1, 1)

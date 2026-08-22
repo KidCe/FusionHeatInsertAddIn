@@ -9,29 +9,40 @@ class _Handler:
         pass
 
 
-class AddInImportTests(unittest.TestCase):
-    def test_module_imports_with_minimal_adsk_surface(self):
+class _Selection:
+    selectionCount = 1
+
+    def selection(self, index):
+        return types.SimpleNamespace(
+            entity=types.SimpleNamespace(objectType="adsk::fusion::BRepFaceProxy")
+        )
+
+
+class SelectionDiagnosticsTests(unittest.TestCase):
+    def test_face_type_error_identifies_the_input_and_fusion_type(self):
         adsk = types.ModuleType("adsk")
         core = types.ModuleType("adsk.core")
         fusion = types.ModuleType("adsk.fusion")
         core.CommandEventHandler = _Handler
         core.InputChangedEventHandler = _Handler
         core.CommandCreatedEventHandler = _Handler
+        core.SelectionCommandInput = types.SimpleNamespace(cast=lambda value: value)
+        fusion.BRepFace = types.SimpleNamespace(cast=lambda value: None)
         adsk.core = core
         adsk.fusion = fusion
-
         old_modules = {
             name: sys.modules.get(name) for name in ("adsk", "adsk.core", "adsk.fusion")
         }
-        sys.modules["adsk"] = adsk
-        sys.modules["adsk.core"] = core
-        sys.modules["adsk.fusion"] = fusion
+        sys.modules.update({"adsk": adsk, "adsk.core": core, "adsk.fusion": fusion})
         try:
             sys.modules.pop("FusionHeatInsertAddIn", None)
             module = importlib.import_module("FusionHeatInsertAddIn")
-            self.assertEqual(module.ADDIN_VERSION, "0.5.4")
-            self.assertTrue(callable(module.run))
-            self.assertTrue(callable(module.stop))
+            inputs = types.SimpleNamespace(itemById=lambda _input_id: _Selection())
+            with self.assertRaisesRegex(
+                ValueError,
+                r"Screw Entry Face.*adsk::fusion::BRepFaceProxy.*native planar BRepFace",
+            ):
+                module._selected_entity(inputs, "screw_exit_face", fusion.BRepFace.cast)
         finally:
             sys.modules.pop("FusionHeatInsertAddIn", None)
             for name, previous in old_modules.items():
