@@ -13,6 +13,9 @@ class _Face:
     objectType = "adsk::fusion::BRepFace"
     assemblyContext = None
 
+    def __init__(self, token="face-token"):
+        self.entityToken = token
+
 
 class _ConstructionPlane:
     objectType = "adsk::fusion::ConstructionPlane"
@@ -71,6 +74,14 @@ class SketchFaceAutofillTests(unittest.TestCase):
         point = _Point(_Sketch(_ConstructionPlane()))
 
         self.assertIsNone(self.module._screw_face_from_locations([point]))
+
+    def test_face_wrappers_with_the_same_fusion_token_are_recognized_as_one_face(self):
+        selected_face = _Face("same-face-token")
+        sketch_face = _Face("same-face-token")
+
+        self.assertTrue(
+            self.module._faces_represent_same_entity(selected_face, sketch_face)
+        )
 
     def test_auto_fill_adds_the_suggested_face_only_when_the_field_is_empty(self):
         class _Bool:

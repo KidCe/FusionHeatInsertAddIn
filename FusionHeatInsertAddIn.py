@@ -49,7 +49,7 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.5.7"
+ADDIN_VERSION = "0.5.8"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
 LEGACY_COMMAND_IDS = (
@@ -233,6 +233,40 @@ def _selected_entity(inputs, input_id: str, cast, selection_cache=None) -> Any:
     return entity
 
 
+def _faces_represent_same_entity(first, second) -> bool:
+    if not first or not second:
+        return False
+    if first is second or first == second:
+        return True
+    for left, right in ((first, second), (second, first)):
+        is_same = getattr(left, "isSame", None)
+        if callable(is_same):
+            try:
+                if is_same(right):
+                    return True
+            except Exception:
+                pass
+    first_native = getattr(first, "nativeObject", None) or first
+    second_native = getattr(second, "nativeObject", None) or second
+    if first_native is second_native or first_native == second_native:
+        return True
+    first_token = getattr(first_native, "entityToken", "") or ""
+    second_token = getattr(second_native, "entityToken", "") or ""
+    if first_token and first_token == second_token:
+        return True
+    first_temp_id = getattr(first_native, "tempId", None)
+    second_temp_id = getattr(second_native, "tempId", None)
+    first_body = getattr(first_native, "body", None)
+    second_body = getattr(second_native, "body", None)
+    return bool(
+        first_temp_id
+        and first_temp_id == second_temp_id
+        and first_body
+        and second_body
+        and (first_body is second_body or first_body == second_body)
+    )
+
+
 def _selected_points(inputs, selection_cache=None) -> List[adsk.fusion.SketchPoint]:
     selection = adsk.core.SelectionCommandInput.cast(inputs.itemById("locations"))
     if not selection or selection.selectionCount < 1:
@@ -346,6 +380,9 @@ def _points_are_on_face(
     face: adsk.fusion.BRepFace,
     points: List[adsk.fusion.SketchPoint],
 ) -> bool:
+    sketch_face = _screw_face_from_locations(points)
+    if sketch_face and _faces_represent_same_entity(face, sketch_face):
+        return True
     evaluator = adsk.core.SurfaceEvaluator.cast(face.evaluator)
     plane = _plane_from_face(face)
     normal = plane.normal
