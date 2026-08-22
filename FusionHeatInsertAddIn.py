@@ -49,7 +49,7 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.5.4"
+ADDIN_VERSION = "0.5.5"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
 LEGACY_COMMAND_IDS = (
@@ -109,7 +109,45 @@ def _active_design() -> adsk.fusion.Design:
     return design
 
 
-def _selected_entity(inputs, input_id: str, cast) -> Any:
+def _remember_selection(selection_cache, key: str, entity) -> None:
+    if selection_cache is None or not entity:
+        return
+    selection_cache[key] = {
+        "entity": entity,
+        "token": getattr(entity, "entityToken", "") or "",
+    }
+
+
+def _resolve_cached_selection(selection_cache, key: str, cast) -> Any:
+    if not selection_cache:
+        return None
+    cached = selection_cache.get(key) or {}
+    entity = cached.get("entity")
+    if entity:
+        try:
+            if getattr(entity, "isValid", True):
+                resolved = cast(entity)
+                if resolved:
+                    return resolved
+        except Exception:
+            pass
+    token = cached.get("token")
+    if not token or not APP:
+        return None
+    try:
+        design = adsk.fusion.Design.cast(APP.activeProduct)
+        matches = design.findEntityByToken(token) if design else []
+        for match in matches:
+            resolved = cast(match)
+            if resolved:
+                _remember_selection(selection_cache, key, resolved)
+                return resolved
+    except Exception:
+        _log("Selection token resolution failed for {}: {}".format(key, traceback.format_exc()))
+    return None
+
+
+def _selected_entity(inputs, input_id: str, cast, selection_cache=None) -> Any:
     selection = adsk.core.SelectionCommandInput.cast(inputs.itemById(input_id))
     labels = {
         "insert_face": "Insert Entry Face (Manual)",
@@ -117,12 +155,29 @@ def _selected_entity(inputs, input_id: str, cast) -> Any:
     }
     label = labels.get(input_id, input_id)
     if not selection or selection.selectionCount != 1:
+        if selection_cache is not None:
+            selection_cache.pop(input_id, None)
         raise ConnectionSetError("Select exactly one {}.".format(label))
-    raw_entity = selection.selection(0).entity
+    selected = selection.selection(0)
+    raw_entity = selected.entity if selected else None
     entity = cast(raw_entity)
+    if entity:
+        _remember_selection(selection_cache, input_id, entity)
+        return entity
+    entity = _resolve_cached_selection(selection_cache, input_id, cast)
+    if entity:
+        return entity
     if not entity:
-        object_type = getattr(raw_entity, "objectType", type(raw_entity).__name__)
-        if "Proxy" in object_type or getattr(raw_entity, "assemblyContext", None):
+        object_type = str(
+            getattr(raw_entity, "objectType", type(raw_entity).__name__)
+        )
+        if raw_entity is None:
+            guidance = (
+                "Fusion returned no entity for this visible selection. Clear the "
+                "field and select the native planar face again; if Preview is enabled, "
+                "turn it off while reselecting."
+            )
+        elif "Proxy" in object_type or getattr(raw_entity, "assemblyContext", None):
             guidance = (
                 "This is an occurrence/proxy entity. Activate the target component "
                 "and select its native planar face, not a face through an occurrence."
@@ -139,16 +194,30 @@ def _selected_entity(inputs, input_id: str, cast) -> Any:
     return entity
 
 
-def _selected_points(inputs) -> List[adsk.fusion.SketchPoint]:
+def _selected_points(inputs, selection_cache=None) -> List[adsk.fusion.SketchPoint]:
     selection = adsk.core.SelectionCommandInput.cast(inputs.itemById("locations"))
     if not selection or selection.selectionCount < 1:
+        if selection_cache is not None:
+            for key in list(selection_cache):
+                if key.startswith("locations:"):
+                    selection_cache.pop(key, None)
         raise ConnectionSetError("Select at least one sketch point as a location.")
     points = []
     for index in range(selection.selectionCount):
-        point = adsk.fusion.SketchPoint.cast(selection.selection(index).entity)
+        key = "locations:{}".format(index)
+        selected = selection.selection(index)
+        raw_entity = selected.entity if selected else None
+        point = adsk.fusion.SketchPoint.cast(raw_entity)
+        if point:
+            _remember_selection(selection_cache, key, point)
+        else:
+            point = _resolve_cached_selection(
+                selection_cache, key, adsk.fusion.SketchPoint.cast
+            )
         if not point:
-            raw_entity = selection.selection(index).entity
-            object_type = getattr(raw_entity, "objectType", type(raw_entity).__name__)
+            object_type = str(
+                getattr(raw_entity, "objectType", type(raw_entity).__name__)
+            )
             raise ConnectionSetError(
                 "Locations must be SketchPoints; Fusion returned '{}'. Select a "
                 "sketch point, not a vertex or edge.".format(object_type)
@@ -380,8 +449,11 @@ def _auto_detect_insert_face_enabled(inputs) -> bool:
 def _selected_create_faces(
     inputs,
     points: List[adsk.fusion.SketchPoint],
+    selection_cache=None,
 ) -> Tuple[adsk.fusion.BRepFace, adsk.fusion.BRepFace, bool]:
-    screw_face = _selected_entity(inputs, "screw_exit_face", adsk.fusion.BRepFace.cast)
+    screw_face = _selected_entity(
+        inputs, "screw_exit_face", adsk.fusion.BRepFace.cast, selection_cache
+    )
     auto_detect = _auto_detect_insert_face_enabled(inputs)
     if auto_detect:
         component = getattr(getattr(screw_face, "body", None), "parentComponent", None)
@@ -391,7 +463,9 @@ def _selected_create_faces(
             )
         insert_face = _auto_detect_insert_face(screw_face, points, component)
     else:
-        insert_face = _selected_entity(inputs, "insert_face", adsk.fusion.BRepFace.cast)
+        insert_face = _selected_entity(
+            inputs, "insert_face", adsk.fusion.BRepFace.cast, selection_cache
+        )
     return insert_face, screw_face, auto_detect
 
 
@@ -748,12 +822,12 @@ def _select_head_shape(dropdown, head_shape: str) -> None:
     _select_dropdown_name(dropdown, display_name)
 
 
-def _create_connection_set(inputs) -> Dict[str, Any]:
+def _create_connection_set(inputs, selection_cache=None) -> Dict[str, Any]:
     design = _active_design()
     library = _library()
-    source_points = _selected_points(inputs)
+    source_points = _selected_points(inputs, selection_cache)
     insert_face, screw_face, auto_detect_insert_face = _selected_create_faces(
-        inputs, source_points
+        inputs, source_points, selection_cache
     )
     component, insert_body, screw_body = _validate_geometry(
         insert_face,
@@ -1336,7 +1410,9 @@ def _dialog_mode(inputs) -> str:
     return "edit" if item and item.name == "Edit Existing" else "create"
 
 
-def _dialog_validation_message(inputs, records_by_label, library) -> Optional[str]:
+def _dialog_validation_message(
+    inputs, records_by_label, library, selection_cache=None
+) -> Optional[str]:
     try:
         if _dialog_mode(inputs) == "edit":
             dropdown = adsk.core.DropDownCommandInput.cast(
@@ -1346,8 +1422,10 @@ def _dialog_validation_message(inputs, records_by_label, library) -> Optional[st
             if not item or item.name not in records_by_label:
                 return "Select a managed Connection Set to edit."
         else:
-            points = _selected_points(inputs)
-            insert_face, screw_face, auto_detect = _selected_create_faces(inputs, points)
+            points = _selected_points(inputs, selection_cache)
+            insert_face, screw_face, auto_detect = _selected_create_faces(
+                inputs, points, selection_cache
+            )
             _validate_geometry(
                 insert_face,
                 screw_face,
@@ -1540,7 +1618,12 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
             elif load_record or filter_profiles:
                 self._filter_profiles(inputs)
             self._update_summary(inputs)
-            message = _dialog_validation_message(inputs, self.records_by_label, self.library)
+            message = _dialog_validation_message(
+                inputs,
+                self.records_by_label,
+                self.library,
+                self.dialog_state.get("selection_cache"),
+            )
             if message:
                 _set_dialog_status(inputs, "Not ready — {}".format(message))
         finally:
@@ -1577,7 +1660,10 @@ class ConnectionDialogValidateInputsHandler(
                 )
             else:
                 message = _dialog_validation_message(
-                    inputs, self.records_by_label, self.library
+                    inputs,
+                    self.records_by_label,
+                    self.library,
+                    self.dialog_state.get("selection_cache"),
                 )
         except Exception:
             message = "Fusion could not validate the current inputs. Check the selections and try again."
@@ -1587,9 +1673,9 @@ class ConnectionDialogValidateInputsHandler(
             _set_dialog_status(inputs, "Not ready — {}".format(message))
 
 
-def _run_dialog_operation(inputs, records_by_label, library):
+def _run_dialog_operation(inputs, records_by_label, library, selection_cache=None):
     if _dialog_mode(inputs) == "create":
-        return "created", _create_connection_set(inputs)
+        return "created", _create_connection_set(inputs, selection_cache)
     set_dd = adsk.core.DropDownCommandInput.cast(inputs.itemById("connection_set"))
     item = set_dd.selectedItem if set_dd else None
     record = records_by_label.get(item.name) if item else None
@@ -1613,15 +1699,18 @@ def _run_dialog_operation(inputs, records_by_label, library):
 
 
 class PreviewAppearance:
-    def __init__(self, records_by_label):
+    def __init__(self, records_by_label, selection_cache=None):
         self.records_by_label = records_by_label
+        self.selection_cache = selection_cache
         self.original_opacity: Dict[int, Tuple[Any, float]] = {}
 
     def _bodies(self, inputs) -> List[Any]:
         bodies = []
         if _dialog_mode(inputs) == "create":
-            points = _selected_points(inputs)
-            insert_face, screw_face, _ = _selected_create_faces(inputs, points)
+            points = _selected_points(inputs, self.selection_cache)
+            insert_face, screw_face, _ = _selected_create_faces(
+                inputs, points, self.selection_cache
+            )
             for face in (insert_face, screw_face):
                 if face and face.body:
                     bodies.append(face.body)
@@ -1686,7 +1775,10 @@ class ConnectionDialogPreviewHandler(adsk.core.CommandEventHandler):
         try:
             self.appearance.apply(args.command.commandInputs)
             _run_dialog_operation(
-                args.command.commandInputs, self.records_by_label, self.library
+                args.command.commandInputs,
+                self.records_by_label,
+                self.library,
+                self.dialog_state.get("selection_cache"),
             )
             self.dialog_state["preview_error"] = None
             args.isValidResult = True
@@ -1721,15 +1813,19 @@ class ConnectionDialogDestroyHandler(adsk.core.CommandEventHandler):
 
 
 class ConnectionDialogExecuteHandler(adsk.core.CommandEventHandler):
-    def __init__(self, records_by_label, library):
+    def __init__(self, records_by_label, library, dialog_state):
         super().__init__()
         self.records_by_label = records_by_label
         self.library = library
+        self.dialog_state = dialog_state
 
     def notify(self, args):
         try:
             validation_message = _dialog_validation_message(
-                args.command.commandInputs, self.records_by_label, self.library
+                args.command.commandInputs,
+                self.records_by_label,
+                self.library,
+                self.dialog_state.get("selection_cache"),
             )
             if validation_message:
                 message = "Not ready — {}".format(validation_message)
@@ -1740,7 +1836,10 @@ class ConnectionDialogExecuteHandler(adsk.core.CommandEventHandler):
                 )
                 return
             action, record = _run_dialog_operation(
-                args.command.commandInputs, self.records_by_label, self.library
+                args.command.commandInputs,
+                self.records_by_label,
+                self.library,
+                self.dialog_state.get("selection_cache"),
             )
             _log("Connection Set {}: {}".format(action, record_label(record)))
             UI.messageBox(
@@ -1894,11 +1993,13 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
                 True,
             )
 
-            dialog_state = {"preview_error": None}
+            dialog_state = {"preview_error": None, "selection_cache": {}}
             input_handler = ConnectionDialogInputHandler(
                 records_by_label, library, dialog_state
             )
-            preview_appearance = PreviewAppearance(records_by_label)
+            preview_appearance = PreviewAppearance(
+                records_by_label, dialog_state["selection_cache"]
+            )
             preview_handler = ConnectionDialogPreviewHandler(
                 records_by_label, library, preview_appearance, dialog_state
             )
@@ -1906,7 +2007,9 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
                 records_by_label, library, dialog_state
             )
             destroy_handler = ConnectionDialogDestroyHandler(preview_appearance)
-            execute_handler = ConnectionDialogExecuteHandler(records_by_label, library)
+            execute_handler = ConnectionDialogExecuteHandler(
+                records_by_label, library, dialog_state
+            )
             command.inputChanged.add(input_handler)
             command.executePreview.add(preview_handler)
             command.validateInputs.add(validate_handler)
