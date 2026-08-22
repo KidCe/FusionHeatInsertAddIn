@@ -179,7 +179,7 @@ class AutoFaceDetectionTests(unittest.TestCase):
     def test_ignores_a_candidate_on_the_outward_side_of_the_screw_face(self):
         component, screw_face, points, _ = self._geometry([0.015])
 
-        with self.assertRaisesRegex(ValueError, "no unique opposing planar face"):
+        with self.assertRaisesRegex(ValueError, "no planar face on another body"):
             self.module._auto_detect_insert_face(screw_face, points, component)
 
     def test_custom_gap_tolerance_can_include_a_larger_plane_distance(self):

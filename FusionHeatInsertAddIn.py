@@ -49,7 +49,7 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.5.9"
+ADDIN_VERSION = "0.5.10"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
 LEGACY_COMMAND_IDS = (
@@ -562,10 +562,12 @@ def _auto_detect_insert_face(
 
     if not candidates:
         raise ConnectionSetError(
-            "Automatic Insert Face detection found no unique opposing planar face "
-            "within {:.3g} mm that covers all selected locations. Disable Auto-detect "
-            "Insert Face and select the Insert Entry Face manually."
-            .format(max_gap_mm)
+            "Automatic Insert Face detection found the Screw body's exit about "
+            "{:.3g} mm behind the Screw Entry Face, but no planar face on another "
+            "body was found within {:.3g} mm after that exit that covers all selected "
+            "locations. Disable Auto-detect Insert Face and select the Insert Entry "
+            "Face manually."
+            .format(screw_exit_distance_cm * 10.0, max_gap_mm)
         )
 
     candidates.sort(key=lambda item: item[0])
@@ -1686,6 +1688,14 @@ def _set_dialog_status(inputs, message: str) -> None:
         status.text = message
 
 
+def _dialog_status_text(validation_message: Optional[str], mode: str) -> str:
+    if validation_message:
+        return "Not ready — {}".format(validation_message)
+    if mode == "edit":
+        return "Confirmed — the selected Connection Set and options are valid. Click OK to update it."
+    return "Confirmed — all required inputs are valid. Click OK to create the connection set."
+
+
 class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
     def __init__(
         self,
@@ -1815,43 +1825,6 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
             selected_screw_id,
         )
 
-    def _update_summary(self, inputs) -> None:
-        status = adsk.core.TextBoxCommandInput.cast(inputs.itemById("dialog_status"))
-        if _dialog_mode(inputs) == "edit" and not self._selected_record(inputs):
-            status.text = "No managed Connection Set is available in this design."
-            return
-        insert_dd = adsk.core.DropDownCommandInput.cast(inputs.itemById("insert_profile"))
-        screw_dd = adsk.core.DropDownCommandInput.cast(inputs.itemById("screw_profile"))
-        insert = self.library.insert(_selected_dropdown_id(insert_dd, self.library.inserts))
-        screw = self.library.screw(_selected_dropdown_id(screw_dd, self.library.screws))
-        head_shape = _selected_head_shape(inputs)
-        if _dialog_mode(inputs) == "edit":
-            action = "Existing faces and points will be reused."
-        elif _auto_detect_insert_face_enabled(inputs):
-            action = (
-                "Select Locations first; the Screw Entry Face can be taken from their "
-                "sketch and the Insert Entry Face is detected within {:.3g} mm."
-            ).format(_selected_auto_insert_face_tolerance_mm(inputs))
-        elif _auto_fill_screw_face_enabled(inputs):
-            action = (
-                "Select Locations first; the Screw Entry Face is filled from their "
-                "sketch when it is based on a native face."
-            )
-        else:
-            action = "Select Locations and the two faces above, or choose a face manually."
-        status.text = (
-            "{} Insert Ø{:.3g} mm +{:.3g} mm tolerance x {:.3g} mm plus {:.3g} mm depth clearance; screw Ø{:.3g} mm; {} clearance Ø{:.3g} mm."
-        ).format(
-            action,
-            insert.hole_diameter_mm + _selected_hole_diameter_tolerance_mm(inputs),
-            _selected_hole_diameter_tolerance_mm(inputs),
-            insert.hole_depth_mm,
-            _insert_clearance_depth_mm(inputs),
-            screw.clearance_diameter_mm,
-            "button-head" if head_shape == "button" else "cap-head",
-            screw.head_clearance_diameter_mm(head_shape),
-        )
-
     def sync(
         self, inputs, load_record: bool = False, filter_profiles: bool = False
     ) -> None:
@@ -1864,15 +1837,13 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
                 self._load_record(inputs)
             elif load_record or filter_profiles:
                 self._filter_profiles(inputs)
-            self._update_summary(inputs)
             message = _dialog_validation_message(
                 inputs,
                 self.records_by_label,
                 self.library,
                 self.dialog_state.get("selection_cache"),
             )
-            if message:
-                _set_dialog_status(inputs, "Not ready — {}".format(message))
+            _set_dialog_status(inputs, _dialog_status_text(message, _dialog_mode(inputs)))
         finally:
             self.syncing = False
 
@@ -1916,6 +1887,10 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
             )
         except Exception:
             _log("Connection dialog update failed: {}".format(traceback.format_exc()))
+            _set_dialog_status(
+                args.inputs,
+                "Not ready — Fusion could not validate the current inputs. Check the selections and try again.",
+            )
 
 
 class ConnectionDialogValidateInputsHandler(
@@ -1946,8 +1921,7 @@ class ConnectionDialogValidateInputsHandler(
             message = "Fusion could not validate the current inputs. Check the selections and try again."
             _log("Connection dialog validation failed: {}".format(traceback.format_exc()))
         args.areInputsValid = not bool(message)
-        if message:
-            _set_dialog_status(inputs, "Not ready — {}".format(message))
+        _set_dialog_status(inputs, _dialog_status_text(message, _dialog_mode(inputs)))
 
 
 def _run_dialog_operation(inputs, records_by_label, library, selection_cache=None):
