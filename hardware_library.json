@@ -99,7 +99,7 @@
     },
     {
       "id": "generic-m2-starter",
-      "displayName": "M2 Heat-Set Insert — approximate starter profile",
+      "displayName": "M2 Heat-Set Threaded Insert — approximate starter profile",
       "threadSize": "M2",
       "recipe": "countersink_hole_v1",
       "holeDiameterMm": 3.0,
@@ -111,7 +111,7 @@
     },
     {
       "id": "generic-m3-user-example",
-      "displayName": "M3 Heat-Set Insert — 4.05 x 5.00 mm (starter)",
+      "displayName": "M3 Heat-Set Threaded Insert — 4.05 x 5.00 mm (starter)",
       "threadSize": "M3",
       "recipe": "countersink_hole_v1",
       "holeDiameterMm": 4.05,
@@ -123,7 +123,7 @@
     },
     {
       "id": "generic-m4-starter",
-      "displayName": "M4 Heat-Set Insert — approximate starter profile",
+      "displayName": "M4 Heat-Set Threaded Insert — approximate starter profile",
       "threadSize": "M4",
       "recipe": "countersink_hole_v1",
       "holeDiameterMm": 5.2,

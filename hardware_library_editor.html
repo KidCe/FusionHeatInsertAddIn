@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Heat Insert Hardware Library Editor</title>
+  <title>Threaded Insert Hardware Library Editor</title>
   <style>
     :root { color-scheme: dark; --bg:#11151b; --panel:#1a2029; --panel2:#222b36; --line:#344252; --text:#eef3f8; --muted:#9eacbb; --accent:#55b6ff; --danger:#ff6b72; --ok:#63d69a; }
     * { box-sizing: border-box; }
@@ -51,7 +51,7 @@
   <header>
     <div>
       <h1>Hardware Library Editor</h1>
-      <div class="subtitle">Heat Insert Connections · <span id="fileName">No file opened</span></div>
+      <div class="subtitle">Threaded Insert Connections · <span id="fileName">No file opened</span></div>
     </div>
     <div class="toolbar">
       <button id="openButton" class="primary">Open Library</button>
@@ -101,7 +101,7 @@
     function profiles(kind=state.kind) { return state.library ? state.library[arrays[kind]] : []; }
     function selected() { return profiles().find(p => p.id === state.selectedId) || null; }
     function setStatus(message,type="") { const el=$("status"); el.textContent=message; el.className="status "+type; }
-    function markDirty() { state.dirty=true; document.title="* Heat Insert Hardware Library Editor"; validate(); }
+    function markDirty() { state.dirty=true; document.title="* Threaded Insert Hardware Library Editor"; validate(); }
     function refreshThreads() {
       const current=$("threadFilter").value;
       const sizes=[...new Set(profiles().map(p=>p.threadSize).filter(Boolean))].sort();
@@ -182,7 +182,7 @@
       try{const db=await handleDatabase();const tx=db.transaction("handles","readonly");const request=tx.objectStore("handles").get("hardware-library");const handle=await new Promise((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});db.close();return handle||null;}catch{return null;}
     }
     async function loadFile(file,handle=null){
-      try{ state.library=normalizeLibrary(JSON.parse(await file.text())); state.fileHandle=handle; await rememberHandle(handle); state.kind="insert"; state.selectedId=state.library.insertProfiles[0]?.id||null; state.dirty=false; $("kindFilter").value="insert"; $("fileName").textContent=file.name; document.title="Heat Insert Hardware Library Editor"; render(); }
+      try{ state.library=normalizeLibrary(JSON.parse(await file.text())); state.fileHandle=handle; await rememberHandle(handle); state.kind="insert"; state.selectedId=state.library.insertProfiles[0]?.id||null; state.dirty=false; $("kindFilter").value="insert"; $("fileName").textContent=file.name; document.title="Threaded Insert Hardware Library Editor"; render(); }
       catch(error){setStatus(`Could not open library: ${error.message}`,"error");}
     }
     async function openLibrary(){
@@ -209,23 +209,23 @@
     function isLocalEditorServer(){return location.protocol==="http:"&&location.hostname==="127.0.0.1";}
     async function save(){
       if(!validate()) return;
-      if(state.fileHandle){try{const writable=await state.fileHandle.createWritable();await writable.write(jsonText());await writable.close();state.dirty=false;document.title="Heat Insert Hardware Library Editor";setStatus("Library saved.","ok");return;}catch(error){setStatus(`Direct save failed: ${error.message}`,"error");return;}}
+      if(state.fileHandle){try{const writable=await state.fileHandle.createWritable();await writable.write(jsonText());await writable.close();state.dirty=false;document.title="Threaded Insert Hardware Library Editor";setStatus("Library saved.","ok");return;}catch(error){setStatus(`Direct save failed: ${error.message}`,"error");return;}}
       if(isLocalEditorServer()){
-        try{const response=await fetch("/hardware_library.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:jsonText()});const result=await response.json();if(!response.ok||!result.saved)throw new Error(result.error||`HTTP ${response.status}`);state.dirty=false;document.title="Heat Insert Hardware Library Editor";setStatus("Library saved directly to hardware_library.json.","ok");return;}catch(error){setStatus(`Direct save failed: ${error.message}`,"error");return;}
+        try{const response=await fetch("/hardware_library.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:jsonText()});const result=await response.json();if(!response.ok||!result.saved)throw new Error(result.error||`HTTP ${response.status}`);state.dirty=false;document.title="Threaded Insert Hardware Library Editor";setStatus("Library saved directly to hardware_library.json.","ok");return;}catch(error){setStatus(`Direct save failed: ${error.message}`,"error");return;}
       }
       await saveAs();
     }
     async function saveAs(){
       if(!validate()) return;
       if(window.showSaveFilePicker){
-        try{const handle=await showSaveFilePicker({suggestedName:"hardware_library.json",types:[{description:"JSON hardware library",accept:{"application/json":[".json"]}}]});const writable=await handle.createWritable();await writable.write(jsonText());await writable.close();state.fileHandle=handle;await rememberHandle(handle);state.dirty=false;$("fileName").textContent=(await handle.getFile()).name;document.title="Heat Insert Hardware Library Editor";setStatus("Library saved.","ok");return;}catch(error){if(error.name!=="AbortError")setStatus(`Save failed: ${error.message}`,"error");return;}
+        try{const handle=await showSaveFilePicker({suggestedName:"hardware_library.json",types:[{description:"JSON hardware library",accept:{"application/json":[".json"]}}]});const writable=await handle.createWritable();await writable.write(jsonText());await writable.close();state.fileHandle=handle;await rememberHandle(handle);state.dirty=false;$("fileName").textContent=(await handle.getFile()).name;document.title="Threaded Insert Hardware Library Editor";setStatus("Library saved.","ok");return;}catch(error){if(error.name!=="AbortError")setStatus(`Save failed: ${error.message}`,"error");return;}
       }
-      const blob=new Blob([jsonText()],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download="hardware_library.json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);state.dirty=false;document.title="Heat Insert Hardware Library Editor";setStatus("Library downloaded. Replace the add-in copy if required.","ok");
+      const blob=new Blob([jsonText()],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download="hardware_library.json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);state.dirty=false;document.title="Threaded Insert Hardware Library Editor";setStatus("Library downloaded. Replace the add-in copy if required.","ok");
     }
     function uniqueId(base){const ids=new Set(profiles().map(p=>p.id));let id=base||`new-${state.kind}-profile`,n=2;while(ids.has(id))id=`${base}-${n++}`;return id;}
     function newProfile(){
       const thread=$("threadFilter").value==="all"?"M3":$("threadFilter").value;
-      const p=state.kind==="insert"?{id:uniqueId("new-insert-profile"),displayName:"New Insert Profile",threadSize:thread,recipe:"countersink_hole_v1",holeDiameterMm:4,holeDepthMm:5,leadInDiameterMm:4.5,leadInAngleDeg:90,tipAngleDeg:180,notes:"Verify all dimensions before manufacturing."}:{id:uniqueId("new-screw-profile"),displayName:"New Screw Profile",threadSize:thread,recipe:"offset_head_seat_v1",clearanceDiameterMm:3.5,buttonHeadClearanceDiameterMm:6.2,capHeadClearanceDiameterMm:6.5,notes:"Verify all dimensions before manufacturing."};
+      const p=state.kind==="insert"?{id:uniqueId("new-insert-profile"),displayName:"New Threaded Insert Profile",threadSize:thread,recipe:"countersink_hole_v1",holeDiameterMm:4,holeDepthMm:5,leadInDiameterMm:4.5,leadInAngleDeg:90,tipAngleDeg:180,notes:"Verify all dimensions before manufacturing."}:{id:uniqueId("new-screw-profile"),displayName:"New Screw Profile",threadSize:thread,recipe:"offset_head_seat_v1",clearanceDiameterMm:3.5,buttonHeadClearanceDiameterMm:6.2,capHeadClearanceDiameterMm:6.5,notes:"Verify all dimensions before manufacturing."};
       profiles().push(p);state.selectedId=p.id;markDirty();render();
     }
     function duplicateProfile(){const source=selected();if(!source)return;const copy=structuredClone(source);copy.id=uniqueId(`${source.id}-copy`);copy.displayName=`${source.displayName} (Copy)`;profiles().push(copy);state.selectedId=copy.id;markDirty();render();}

@@ -1,8 +1,8 @@
-# Heat Insert Connections for Autodesk Fusion
+# Threaded Insert Connections for Autodesk Fusion
 
-Create matching screw holes and heat-insert pockets in Autodesk Fusion 360 from
+Create matching screw holes and heat-set threaded-insert pockets in Autodesk Fusion 360 from
 a few selections. The add-in is designed for 3D-printed parts where two bodies
-need to be joined with a screw and a brass heat-set insert.
+need to be joined with a screw and a brass heat-set threaded insert.
 
 ## See it first
 
@@ -14,10 +14,10 @@ need to be joined with a screw and a brass heat-set insert.
 
 ## What it does
 
-You select the screw-entry surface and one or more sketch points. Heat Insert
-Connections then creates and keeps aligned:
+You select the screw-entry surface and one or more sketch points. Threaded
+Insert Connections then creates and keeps aligned:
 
-- a blind heat-insert pocket with a lead-in countersink;
+- a blind heat-set threaded-insert pocket with a lead-in countersink;
 - a through screw-clearance hole in the second body; and
 - a Button Head or Cap Head clearance pocket.
 
@@ -51,8 +51,8 @@ stackups, or broken references after major model changes. Automatic face
 detection is limited to a unique opposing planar face in the direction into the
 Screw body. The detector first finds the Screw body's exit face and measures the
 configured tolerance only from that exit to the Insert Entry Face. Its default
-gap tolerance is 0.2 mm, with larger values available in the dialog; the last
-selected value is remembered for the next start. Manual face selection is
+gap tolerance is 0.2 mm, and the dialog accepts any positive value up to 100 mm;
+the last entered value is remembered for the next start. Manual face selection is
 available when the geometry is unusual.
 
 ## Command and selections
@@ -74,11 +74,11 @@ Disable **Auto-detect Insert Face** when the geometry is unusual or ambiguous. T
 
 For Create New, select:
 
-- **Insert Entry Face**: the outside face where the insert is installed;
+- **Insert Entry Face**: the outside face where the heat-set threaded insert is installed;
 - **Screw Entry Face**: the face where the screw leaves the screw-side body and continues toward the insert body; and
 - **Locations**: one or more sketch points defining the connection axes. In the normal workflow this is the sketch-host face used above.
 
-For Edit Existing, select the managed Connection Set and change its Thread Size, Insert Profile, Insert Hole Diameter Tolerance, Screw Profile, Head Shape, Head Seat Distance, or Additional Insert Clearance Depth. The original faces and points are reused.
+For Edit Existing, select the managed Connection Set and change its Thread Size, Threaded Insert Profile, Insert Hole Diameter Tolerance, Screw Profile, Head Shape, Head Seat Distance, or Additional Insert Clearance Depth. The original faces and points are reused.
 
 **Preview** is available for both actions and is off by default. During preview, the two affected bodies use a temporary 35% opacity override so internal cuts are easier to inspect. The original opacity is restored when preview is disabled or the dialog closes. Orphaned metadata is excluded from Edit Existing when its timeline group or managed features no longer exist.
 
@@ -88,9 +88,18 @@ For Edit Existing, select the managed Connection Set and change its Thread Size,
 
 **Insert Hole Diameter Tolerance** adds a positive diameter offset to the selected insert profile. The available values are 0.00, 0.05, 0.10, 0.15 and 0.20 mm; for example, a 4.00 mm M3 profile becomes 4.05 or 4.10 mm. This is a simple hardware-fit allowance, not slicer compensation, and it affects only the cylindrical insert hole.
 
+**Auto-detect Gap Tolerance** is an editable distance in millimetres. When it
+changes while automatic detection is enabled, the Insert Entry Face is
+recomputed immediately and the detected face is refreshed without reselecting
+the Screw Entry Face.
+
 **Add Insert Clearance** is off by default. When enabled, **Additional Insert Clearance Depth** extends the insert-side blind hole beyond the nominal insert length. When disabled, the profile depth is used unchanged.
 
-The library includes RUTHEX M2, M3, M4 and M6 insert profiles (including Short and VORON variants where applicable), plus researched M2/M3/M4/M6 Button Head and Cap Head screw profiles. The complete RUTHEX metric catalogue and screw-dimension sources are documented in [`RESEARCH_hardware_dimensions.md`](RESEARCH_hardware_dimensions.md). Generic example profiles remain available for comparison but are intentionally approximate. Verify every value against the actual hardware datasheet, screw standard, printer/material process, and required tolerances.
+The library includes RUTHEX M2, M3, M4 and M6 threaded-insert profiles (including Short and VORON variants where applicable), plus researched M2/M3/M4/M6 Button Head and Cap Head screw profiles. The complete RUTHEX metric catalogue and screw-dimension sources are documented in [`RESEARCH_hardware_dimensions.md`](RESEARCH_hardware_dimensions.md). Generic example profiles remain available for comparison but are intentionally approximate. Verify every value against the actual hardware datasheet, screw standard, printer/material process, and required tolerances.
+
+### Terminology
+
+This project uses **threaded insert** as the general hardware term and **heat-set threaded insert** when the installation method matters. This follows the terminology used by RUTHEX for its products and by 3D-printing references for inserts installed with heat. **Insert Entry Face** remains the geometric UI term for the planar face from which the insert pocket is created.
 
 Restart the add-in after editing the library so its dropdowns reload the data.
 

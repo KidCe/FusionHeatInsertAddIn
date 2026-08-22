@@ -79,7 +79,7 @@ $listener.Prefixes.Add($prefix)
 try {
     $listener.Start()
     $url = "$prefix`hardware_library_editor.html"
-    Write-Host "Heat Insert Hardware Library Editor"
+    Write-Host "Threaded Insert Hardware Library Editor"
     Write-Host "Serving the repository on $url"
     Write-Host "This server listens on loopback only. Close this window to stop it."
     Start-Process $url

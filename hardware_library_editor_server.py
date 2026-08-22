@@ -85,7 +85,7 @@ def main() -> None:
         raise SystemExit("Editor or hardware_library.json is missing from this folder.")
     server = ThreadingHTTPServer(("127.0.0.1", 0), EditorHandler)
     url = f"http://127.0.0.1:{server.server_port}/hardware_library_editor.html"
-    print("Heat Insert Hardware Library Editor")
+    print("Threaded Insert Hardware Library Editor")
     print(f"Serving only this folder on {url}")
     print("Close this window or press Ctrl+C to stop.\n")
     webbrowser.open(url)

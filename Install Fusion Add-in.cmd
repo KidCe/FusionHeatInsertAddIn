@@ -1,9 +1,9 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title Heat Insert Connections - Install Fusion Add-in
+title Threaded Insert Connections - Install Fusion Add-in
 
-echo Installing Heat Insert Connections into the current user's Fusion 360 Add-ins folder...
+echo Installing Threaded Insert Connections into the current user's Fusion 360 Add-ins folder...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Install-FusionAddIn.ps1" -Clean
 if errorlevel 1 (
     echo.

@@ -201,10 +201,10 @@ class AutoFaceDetectionTests(unittest.TestCase):
     def test_auto_detect_tolerance_is_persisted_between_dialog_starts(self):
         with tempfile.TemporaryDirectory() as settings_root:
             with patch.dict(os.environ, {"APPDATA": settings_root}, clear=False):
-                self.module._save_auto_insert_face_tolerance_mm(1.0)
+                self.module._save_auto_insert_face_tolerance_mm(0.37)
 
                 self.assertEqual(
-                    self.module._saved_auto_insert_face_tolerance_mm(), 1.0
+                    self.module._saved_auto_insert_face_tolerance_mm(), 0.37
                 )
 
 

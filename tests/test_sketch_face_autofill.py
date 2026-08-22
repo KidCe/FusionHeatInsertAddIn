@@ -9,6 +9,12 @@ class _Handler:
         pass
 
 
+class _Cast:
+    @staticmethod
+    def cast(value):
+        return value
+
+
 class _Face:
     objectType = "adsk::fusion::BRepFace"
     assemblyContext = None
@@ -39,6 +45,7 @@ class SketchFaceAutofillTests(unittest.TestCase):
         core.CommandEventHandler = _Handler
         core.InputChangedEventHandler = _Handler
         core.CommandCreatedEventHandler = _Handler
+        core.ValueCommandInput = _Cast
         core.BoolValueCommandInput = types.SimpleNamespace(cast=lambda value: value)
         core.SelectionCommandInput = types.SimpleNamespace(cast=lambda value: value)
         fusion.BRepFace = types.SimpleNamespace(
@@ -108,6 +115,53 @@ class SketchFaceAutofillTests(unittest.TestCase):
         self.assertFalse(
             self.module._try_auto_fill_screw_face(inputs, [_Point(_Sketch(_Face()))])
         )
+
+    def test_tolerance_change_replaces_the_persisted_auto_detected_face(self):
+        class _Bool:
+            def __init__(self, value):
+                self.value = value
+
+        class _Selection:
+            def __init__(self, face=None):
+                self.selected = face
+                self.selectionCount = 1 if face else 0
+
+            def selection(self, _index):
+                return types.SimpleNamespace(entity=self.selected)
+
+            def clearSelection(self):
+                self.selected = None
+                self.selectionCount = 0
+
+            def addSelection(self, face):
+                self.selected = face
+                self.selectionCount = 1
+
+        component = types.SimpleNamespace()
+        body = types.SimpleNamespace(parentComponent=component)
+        screw_face = _Face("screw")
+        screw_face.body = body
+        candidate = _Face("candidate")
+        candidate.body = types.SimpleNamespace(parentComponent=component)
+        points = [_Point(_Sketch(screw_face))]
+        values = {
+            "auto_detect_insert_face": _Bool(True),
+            "auto_fill_screw_face": _Bool(False),
+            "auto_insert_face_tolerance": types.SimpleNamespace(value=0.05),
+            "screw_exit_face": _Selection(screw_face),
+            "insert_face": _Selection(),
+        }
+        inputs = types.SimpleNamespace(itemById=values.get)
+        with unittest.mock.patch.object(
+            self.module, "_auto_detect_insert_face", return_value=candidate
+        ) as detect:
+            self.assertTrue(
+                self.module._refresh_auto_detected_insert_face(inputs, points)
+            )
+
+        detect.assert_called_once()
+        self.assertIs(values["insert_face"].selected, candidate)
+        self.assertEqual(detect.call_args.kwargs["max_gap_mm"], 0.5)
 
 
 if __name__ == "__main__":

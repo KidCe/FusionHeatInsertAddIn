@@ -1,4 +1,4 @@
-"""Heat Insert Connections MVP add-in for Autodesk Fusion.
+"""Threaded Insert Connections MVP add-in for Autodesk Fusion.
 
 Creates a managed Connection Set consisting of:
 
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import importlib
+import math
 import os
 import sys
 import traceback
@@ -49,7 +50,7 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.5.10"
+ADDIN_VERSION = "0.5.11"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
 LEGACY_COMMAND_IDS = (
@@ -70,7 +71,7 @@ HOLE_DIAMETER_TOLERANCES = {
     "+0.20 mm": 0.20,
 }
 AUTO_INSERT_FACE_DEFAULT_GAP_MM = 0.2
-AUTO_INSERT_FACE_TOLERANCES_MM = (0.2, 0.5, 1.0, 2.0, 5.0)
+AUTO_INSERT_FACE_MAX_GAP_MM = 100.0
 POINT_FACE_TOLERANCE_CM = 1e-4
 USER_SETTINGS_FILE = "FusionHeatInsertAddIn/settings.json"
 GEOMETRY_TOLERANCE_CM = 1e-5
@@ -114,7 +115,7 @@ def _saved_auto_insert_face_tolerance_mm() -> float:
         with open(_user_settings_path(), "r", encoding="utf-8") as settings_file:
             settings = json.load(settings_file)
         value = float(settings.get("autoInsertFaceToleranceMm"))
-        if value in AUTO_INSERT_FACE_TOLERANCES_MM:
+        if 0 < value <= AUTO_INSERT_FACE_MAX_GAP_MM and math.isfinite(value):
             return value
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         pass
@@ -122,7 +123,7 @@ def _saved_auto_insert_face_tolerance_mm() -> float:
 
 
 def _save_auto_insert_face_tolerance_mm(value: float) -> None:
-    if value not in AUTO_INSERT_FACE_TOLERANCES_MM:
+    if not (0 < value <= AUTO_INSERT_FACE_MAX_GAP_MM and math.isfinite(value)):
         return
     path = _user_settings_path()
     try:
@@ -587,28 +588,23 @@ def _auto_detect_insert_face_enabled(inputs) -> bool:
     return bool(toggle and toggle.value)
 
 
-def _auto_insert_face_tolerance_label(value: float) -> str:
-    return "{:.2f} mm".format(value)
-
-
 def _selected_auto_insert_face_tolerance_mm(inputs) -> float:
-    dropdown = adsk.core.DropDownCommandInput.cast(
+    value_input = adsk.core.ValueCommandInput.cast(
         inputs.itemById("auto_insert_face_tolerance")
     )
-    item = dropdown.selectedItem if dropdown else None
-    if not item:
+    if not value_input:
         return AUTO_INSERT_FACE_DEFAULT_GAP_MM
     try:
-        value = float(item.name.replace(" mm", ""))
+        value = float(value_input.value) * 10.0
     except (AttributeError, TypeError, ValueError):
-        raise ConnectionSetError("Select a valid Auto-detect Insert Face tolerance.")
-    if value not in AUTO_INSERT_FACE_TOLERANCES_MM:
-        raise ConnectionSetError("Select a valid Auto-detect Insert Face tolerance.")
+        raise ConnectionSetError("Enter a valid Auto-detect Gap Tolerance in mm.")
+    if not (0 < value <= AUTO_INSERT_FACE_MAX_GAP_MM and math.isfinite(value)):
+        raise ConnectionSetError(
+            "Auto-detect Gap Tolerance must be greater than 0 and no more than {:.0f} mm.".format(
+                AUTO_INSERT_FACE_MAX_GAP_MM
+            )
+        )
     return value
-
-
-def _select_auto_insert_face_tolerance(dropdown, value: float) -> None:
-    _select_dropdown_name(dropdown, _auto_insert_face_tolerance_label(value))
 
 
 def _auto_fill_screw_face_enabled(inputs) -> bool:
@@ -653,6 +649,46 @@ def _try_auto_fill_screw_face(inputs, points, selection_cache=None) -> bool:
         _log("Could not auto-fill Screw Entry Face: {}".format(traceback.format_exc()))
         return False
     _remember_selection(selection_cache, "screw_exit_face", face)
+    return True
+
+
+def _refresh_auto_detected_insert_face(inputs, points, selection_cache=None) -> bool:
+    """Recompute and persist the hidden Insert Entry Face selection.
+
+    Fusion does not automatically refresh a SelectionCommandInput when a
+    dependent value changes. Keeping the detected face in the input also makes
+    the preview state and the final validation use the same current result.
+    """
+    if not _auto_detect_insert_face_enabled(inputs) or not points:
+        return False
+    insert_selection = adsk.core.SelectionCommandInput.cast(
+        inputs.itemById("insert_face")
+    )
+    if not insert_selection:
+        return False
+    screw_selection = adsk.core.SelectionCommandInput.cast(
+        inputs.itemById("screw_exit_face")
+    )
+    if screw_selection and screw_selection.selectionCount:
+        screw_face = _selected_entity(
+            inputs, "screw_exit_face", adsk.fusion.BRepFace.cast, selection_cache
+        )
+    elif _auto_fill_screw_face_enabled(inputs):
+        screw_face = _screw_face_from_locations(points)
+    else:
+        return False
+    component = getattr(getattr(screw_face, "body", None), "parentComponent", None)
+    if not component:
+        return False
+    candidate = _auto_detect_insert_face(
+        screw_face,
+        points,
+        component,
+        max_gap_mm=_selected_auto_insert_face_tolerance_mm(inputs),
+    )
+    insert_selection.clearSelection()
+    insert_selection.addSelection(candidate)
+    _remember_selection(selection_cache, "insert_face", candidate)
     return True
 
 
@@ -788,7 +824,7 @@ def _add_user_parameters(
             spec["name"],
             _value(spec["expression"]),
             spec["units"],
-            "Heat Insert Connection {}".format(connection_id),
+            "Threaded Insert Connection {}".format(connection_id),
         )
         if not parameter:
             raise RuntimeError("Fusion could not create parameter {}.".format(spec["name"]))
@@ -1356,20 +1392,20 @@ class CreateExecuteHandler(adsk.core.CommandEventHandler):
                 "Connection Set created successfully.\n\n{}\n\n"
                 "Starter library dimensions must be verified against the actual hardware before manufacturing."
                 .format(record_label(record)),
-                "Heat Insert Connections",
+                "Threaded Insert Connections",
             )
         except (ConnectionSetError, HardwareLibraryError, ValueError) as error:
             _log("Create validation error: {}".format(error))
             UI.messageBox(
                 "Connection Set was not created.\n\n{}".format(error),
-                "Heat Insert Connections",
+                "Threaded Insert Connections",
             )
         except Exception:
             _log("Create failed: {}".format(traceback.format_exc()))
             UI.messageBox(
                 "Connection Set creation failed.\n\n{}\n\nIf geometry remains, use Undo once."
                 .format(traceback.format_exc()),
-                "Heat Insert Connections",
+                "Threaded Insert Connections",
             )
 
 
@@ -1418,7 +1454,7 @@ class CreateCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
             initial_thread = thread_sizes[0]
 
             insert_dd = inputs.addDropDownCommandInput(
-                "insert_profile", "Insert Profile", adsk.core.DropDownStyles.TextListDropDownStyle
+                "insert_profile", "Threaded Insert Profile", adsk.core.DropDownStyles.TextListDropDownStyle
             )
             for index, profile in enumerate(
                 _profiles_for_thread(library.inserts, initial_thread)
@@ -1465,7 +1501,7 @@ class CreateCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
         except Exception:
             _log("Create command setup failed: {}".format(traceback.format_exc()))
             UI.messageBox(
-                "Heat Insert Connections could not open.\n\n{}".format(
+                "Threaded Insert Connections could not open.\n\n{}".format(
                     traceback.format_exc()
                 )
             )
@@ -1553,20 +1589,20 @@ class EditExecuteHandler(adsk.core.CommandEventHandler):
             _log("Updated {}".format(record_label(updated)))
             UI.messageBox(
                 "Connection Set updated successfully.\n\n{}".format(record_label(updated)),
-                "Heat Insert Connections",
+                "Threaded Insert Connections",
             )
         except (ConnectionSetError, HardwareLibraryError, ValueError) as error:
             _log("Edit validation error: {}".format(error))
             UI.messageBox(
                 "Connection Set was not updated.\n\n{}".format(error),
-                "Heat Insert Connections",
+                "Threaded Insert Connections",
             )
         except Exception:
             _log("Edit failed: {}".format(traceback.format_exc()))
             UI.messageBox(
                 "Connection Set update failed. Previous parameter expressions were restored when possible.\n\n{}"
                 .format(traceback.format_exc()),
-                "Heat Insert Connections",
+                "Threaded Insert Connections",
             )
 
 
@@ -1598,7 +1634,7 @@ class EditCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
                 set_dd.listItems.add("No managed Connection Sets found", True)
 
             insert_dd = inputs.addDropDownCommandInput(
-                "insert_profile", "Insert Profile", adsk.core.DropDownStyles.TextListDropDownStyle
+                "insert_profile", "Threaded Insert Profile", adsk.core.DropDownStyles.TextListDropDownStyle
             )
             for index, profile in enumerate(library.inserts):
                 insert_dd.listItems.add(profile.display_name, index == 0)
@@ -1629,7 +1665,7 @@ class EditCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
         except Exception:
             _log("Edit command setup failed: {}".format(traceback.format_exc()))
             UI.messageBox(
-                "Heat Insert Connections could not open Edit.\n\n{}".format(
+                "Threaded Insert Connections could not open Edit.\n\n{}".format(
                     traceback.format_exc()
                 )
             )
@@ -1708,6 +1744,7 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
         self.library = library
         self.dialog_state = dialog_state
         self.syncing = False
+        self.refreshing_auto_insert_face = False
 
     def _selected_record(self, inputs) -> Optional[Dict[str, Any]]:
         dropdown = adsk.core.DropDownCommandInput.cast(inputs.itemById("connection_set"))
@@ -1720,7 +1757,7 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
         auto_detect = adsk.core.BoolValueCommandInput.cast(
             inputs.itemById("auto_detect_insert_face")
         )
-        auto_detect_tolerance = adsk.core.DropDownCommandInput.cast(
+        auto_detect_tolerance = adsk.core.ValueCommandInput.cast(
             inputs.itemById("auto_insert_face_tolerance")
         )
         insert_face = adsk.core.SelectionCommandInput.cast(inputs.itemById("insert_face"))
@@ -1880,6 +1917,30 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
                     )
                 except ConnectionSetError:
                     pass
+            if args.input.id in (
+                "locations",
+                "auto_fill_screw_face",
+                "screw_exit_face",
+                "auto_detect_insert_face",
+                "auto_insert_face_tolerance",
+            ) and not self.refreshing_auto_insert_face:
+                self.refreshing_auto_insert_face = True
+                try:
+                    try:
+                        points = _selected_points(
+                            args.inputs, self.dialog_state.get("selection_cache")
+                        )
+                        _refresh_auto_detected_insert_face(
+                            args.inputs,
+                            points,
+                            self.dialog_state.get("selection_cache"),
+                        )
+                    except ConnectionSetError:
+                        # The normal validation pass below reports the specific
+                        # missing or invalid input in the dialog status area.
+                        pass
+                finally:
+                    self.refreshing_auto_insert_face = False
             self.sync(
                 args.inputs,
                 load_record=args.input.id in ("dialog_mode", "connection_set"),
@@ -2083,7 +2144,7 @@ class ConnectionDialogExecuteHandler(adsk.core.CommandEventHandler):
                 _set_dialog_status(args.command.commandInputs, message)
                 UI.messageBox(
                     "Connection Set was not changed.\n\n{}".format(message),
-                    "Heat Insert Connections",
+                    "Threaded Insert Connections",
                 )
                 return
             action, record = _run_dialog_operation(
@@ -2097,20 +2158,20 @@ class ConnectionDialogExecuteHandler(adsk.core.CommandEventHandler):
                 "Connection Set {} successfully.\n\n{}\n\n"
                 "Approximate starter profiles must be replaced or verified before manufacturing."
                 .format(action, record_label(record)),
-                "Heat Insert Connections",
+                    "Threaded Insert Connections",
             )
         except (ConnectionSetError, HardwareLibraryError, ValueError) as error:
             _log("Connection dialog validation error: {}".format(error))
             UI.messageBox(
                 "Connection Set was not changed.\n\n{}".format(error),
-                "Heat Insert Connections",
+                    "Threaded Insert Connections",
             )
         except Exception:
             _log("Connection dialog failed: {}".format(traceback.format_exc()))
             UI.messageBox(
                 "Connection Set operation failed.\n\n{}\n\nIf new geometry remains, use Undo once."
                 .format(traceback.format_exc()),
-                "Heat Insert Connections",
+                "Threaded Insert Connections",
             )
 
 
@@ -2127,7 +2188,7 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
             inputs.addTextBoxCommandInput(
                 "intro",
                 "",
-                "Create or edit a paired insert connection. In Create mode, select Locations first. The sketch hosting those points can fill the Screw Entry Face automatically; clear or disable that option to choose another native planar face manually. Fusion can also find the opposing Insert Entry Face on another solid body within the configured tolerance. Native faces from one active component are required; occurrence/proxy faces are not supported.",
+                "Create or edit a paired threaded-insert connection. In Create mode, select Locations first. The sketch hosting those points can fill the Screw Entry Face automatically. The Screw Entry Face is the planar screw-side surface; the Insert Entry Face is the planar surface where the heat-set threaded insert is installed. Native faces from one active component are required; occurrence/proxy faces are not supported.",
                 4,
                 True,
             )
@@ -2159,10 +2220,14 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
             locations = inputs.addSelectionInput(
                 "locations",
                 "Locations",
-                "Select one or more SketchPoints on the face where the screw enters. The parent sketch can provide the Screw Entry Face automatically.",
+                "Select one or more SketchPoints that define the screw axes. These points should be on the face where the screw is inserted.",
             )
             locations.addSelectionFilter("SketchPoints")
             locations.setSelectionLimits(1, 0)
+            locations.tooltip = "Connection locations"
+            locations.tooltipDescription = (
+                "Sketch points that define the screw axes on the screw-entry surface."
+            )
             auto_fill = inputs.addBoolValueInput(
                 "auto_fill_screw_face",
                 "Auto-fill Screw Entry Face from Sketch",
@@ -2171,37 +2236,53 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
                 True,
             )
             auto_fill.isVisible = True
+            auto_fill.tooltip = "Use the location sketch face"
+            auto_fill.tooltipDescription = (
+                "Automatically use the native planar face hosting the selected sketch points as the Screw Entry Face."
+            )
             screw_face = inputs.addSelectionInput(
                 "screw_exit_face",
                 "Screw Entry Face",
-                "Automatically filled from the Locations sketch when possible. Clear it to disable the suggestion, or select the native planar face manually.",
+                "The planar face on the screw-side body from which the screw is inserted. It is filled from the Locations sketch when possible; clear it to choose another native planar face manually.",
             )
             screw_face.addSelectionFilter("PlanarFaces")
             screw_face.setSelectionLimits(0, 1)
+            screw_face.tooltip = "Screw Entry Face"
+            screw_face.tooltipDescription = (
+                "The planar face on the screw-side body from which the screw is inserted."
+            )
             auto_detect = inputs.addBoolValueInput(
                 "auto_detect_insert_face", "Auto-detect Insert Face", True, "", True
             )
             auto_detect.isVisible = True
-            auto_detect_tolerance = inputs.addDropDownCommandInput(
+            auto_detect.tooltip = "Find the Insert Entry Face automatically"
+            auto_detect.tooltipDescription = (
+                "Search for a parallel planar face on another solid body after the Screw body's exit."
+            )
+            auto_detect_tolerance = inputs.addValueInput(
                 "auto_insert_face_tolerance",
                 "Auto-detect Gap Tolerance",
-                adsk.core.DropDownStyles.TextListDropDownStyle,
-            )
-            for tolerance_mm in AUTO_INSERT_FACE_TOLERANCES_MM:
-                auto_detect_tolerance.listItems.add(
-                    _auto_insert_face_tolerance_label(tolerance_mm), False
-                )
-            _select_auto_insert_face_tolerance(
-                auto_detect_tolerance, _saved_auto_insert_face_tolerance_mm()
+                "mm",
+                adsk.core.ValueInput.createByString(
+                    "{} mm".format(_saved_auto_insert_face_tolerance_mm())
+                ),
             )
             auto_detect_tolerance.isVisible = True
+            auto_detect_tolerance.tooltip = "Maximum gap after the Screw body"
+            auto_detect_tolerance.tooltipDescription = (
+                "The maximum distance from the Screw body's exit to the Insert Entry Face. The value is in millimetres."
+            )
             insert_face = inputs.addSelectionInput(
                 "insert_face",
                 "Insert Entry Face (Manual)",
-                "Select the native planar insert entry face when automatic detection is disabled. Do not select a face through an occurrence/proxy.",
+                "The planar face on the other body where the heat-set threaded insert is installed. The generated insert pocket opens from this face; select a native planar face, not an occurrence/proxy.",
             )
             insert_face.addSelectionFilter("PlanarFaces")
             insert_face.setSelectionLimits(0, 1)
+            insert_face.tooltip = "Insert Entry Face"
+            insert_face.tooltipDescription = (
+                "The planar face on the other body where the heat-set threaded insert is installed."
+            )
 
             thread_dd = inputs.addDropDownCommandInput(
                 "thread_size", "Thread Size", adsk.core.DropDownStyles.TextListDropDownStyle
@@ -2217,7 +2298,7 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
             initial_thread = thread_sizes[0]
 
             insert_dd = inputs.addDropDownCommandInput(
-                "insert_profile", "Insert Profile", adsk.core.DropDownStyles.TextListDropDownStyle
+                "insert_profile", "Threaded Insert Profile", adsk.core.DropDownStyles.TextListDropDownStyle
             )
             for index, profile in enumerate(
                 _profiles_for_thread(library.inserts, initial_thread)
@@ -2302,7 +2383,7 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
         except Exception:
             _log("Connection dialog setup failed: {}".format(traceback.format_exc()))
             UI.messageBox(
-                "Heat Insert Connections could not open.\n\n{}".format(
+                "Threaded Insert Connections could not open.\n\n{}".format(
                     traceback.format_exc()
                 )
             )
@@ -2353,7 +2434,7 @@ def run(context):
         _add_control(definition)
         _log("Add-in {} started.".format(ADDIN_VERSION))
     except Exception:
-        message = "Heat Insert Connections failed to start.\n\n{}".format(
+        message = "Threaded Insert Connections failed to start.\n\n{}".format(
             traceback.format_exc()
         )
         _log(message)
