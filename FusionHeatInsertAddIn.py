@@ -49,7 +49,7 @@ from connection_data import (  # noqa: E402
 from hardware_library import HardwareLibrary, HardwareLibraryError  # noqa: E402
 
 
-ADDIN_VERSION = "0.5.5"
+ADDIN_VERSION = "0.5.6"
 LIBRARY_PATH = os.path.join(ADDIN_DIRECTORY, "hardware_library.json")
 COMMAND_ID = "FusionHeatInsertConnectionSet"
 LEGACY_COMMAND_IDS = (
@@ -446,14 +446,75 @@ def _auto_detect_insert_face_enabled(inputs) -> bool:
     return bool(toggle and toggle.value)
 
 
+def _auto_fill_screw_face_enabled(inputs) -> bool:
+    toggle = adsk.core.BoolValueCommandInput.cast(
+        inputs.itemById("auto_fill_screw_face")
+    )
+    return bool(toggle and toggle.value)
+
+
+def _screw_face_from_locations(
+    points: List[adsk.fusion.SketchPoint],
+) -> Optional[adsk.fusion.BRepFace]:
+    """Return the native planar face hosting the locations sketch, if available."""
+    if not points:
+        return None
+    sketch = getattr(points[0], "parentSketch", None)
+    if not sketch:
+        return None
+    if any(getattr(point, "parentSketch", None) != sketch for point in points):
+        return None
+    reference = getattr(sketch, "referencePlane", None)
+    face = adsk.fusion.BRepFace.cast(reference)
+    if not face or getattr(face, "assemblyContext", None):
+        return None
+    return face
+
+
+def _try_auto_fill_screw_face(inputs, points, selection_cache=None) -> bool:
+    if not _auto_fill_screw_face_enabled(inputs):
+        return False
+    screw_face = adsk.core.SelectionCommandInput.cast(
+        inputs.itemById("screw_exit_face")
+    )
+    if not screw_face or screw_face.selectionCount:
+        return False
+    face = _screw_face_from_locations(points)
+    if not face:
+        return False
+    try:
+        screw_face.addSelection(face)
+    except Exception:
+        _log("Could not auto-fill Screw Entry Face: {}".format(traceback.format_exc()))
+        return False
+    _remember_selection(selection_cache, "screw_exit_face", face)
+    return True
+
+
 def _selected_create_faces(
     inputs,
     points: List[adsk.fusion.SketchPoint],
     selection_cache=None,
 ) -> Tuple[adsk.fusion.BRepFace, adsk.fusion.BRepFace, bool]:
-    screw_face = _selected_entity(
-        inputs, "screw_exit_face", adsk.fusion.BRepFace.cast, selection_cache
+    screw_selection = adsk.core.SelectionCommandInput.cast(
+        inputs.itemById("screw_exit_face")
     )
+    if (
+        _auto_fill_screw_face_enabled(inputs)
+        and screw_selection
+        and screw_selection.selectionCount == 0
+    ):
+        screw_face = _screw_face_from_locations(points)
+        if not screw_face:
+            raise ConnectionSetError(
+                "Auto-fill Screw Entry Face could not find a native planar face "
+                "for the selected sketch. Disable Auto-fill and select the Screw "
+                "Entry Face manually, or select points from a sketch based on a face."
+            )
+    else:
+        screw_face = _selected_entity(
+            inputs, "screw_exit_face", adsk.fusion.BRepFace.cast, selection_cache
+        )
     auto_detect = _auto_detect_insert_face_enabled(inputs)
     if auto_detect:
         component = getattr(getattr(screw_face, "body", None), "parentComponent", None)
@@ -495,10 +556,11 @@ def _validate_geometry(
     screw_plane = _plane_from_face(screw_face)
     if not _normals_are_parallel(insert_plane, screw_plane):
         raise ConnectionSetError("Insert Entry and Screw-to-Insert faces must be parallel.")
-    if auto_detect_insert_face and not _points_are_on_face(screw_face, points):
+    if not _points_are_on_face(screw_face, points):
         raise ConnectionSetError(
-            "With Auto-detect Insert Face enabled, every location must be a sketch point "
-            "on the selected Screw Entry Face."
+            "Every location must be a sketch point on the selected Screw Entry Face. "
+            "Select the face hosting the location sketch, or clear the face and choose "
+            "the matching face manually."
         )
 
     source_sketch = points[0].parentSketch
@@ -1483,15 +1545,20 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
         insert_face = adsk.core.SelectionCommandInput.cast(inputs.itemById("insert_face"))
         screw_face = adsk.core.SelectionCommandInput.cast(inputs.itemById("screw_exit_face"))
         locations = adsk.core.SelectionCommandInput.cast(inputs.itemById("locations"))
+        auto_fill = adsk.core.BoolValueCommandInput.cast(
+            inputs.itemById("auto_fill_screw_face")
+        )
         if auto_detect:
             auto_detect.isVisible = not editing
+        if auto_fill:
+            auto_fill.isVisible = not editing
         insert_face.isVisible = not editing and not bool(auto_detect and auto_detect.value)
         screw_face.isVisible = not editing
         locations.isVisible = not editing
         insert_face.setSelectionLimits(
             0 if editing or bool(auto_detect and auto_detect.value) else 1, 1
         )
-        screw_face.setSelectionLimits(0 if editing else 1, 1)
+        screw_face.setSelectionLimits(0, 1)
         locations.setSelectionLimits(0 if editing else 1, 0)
         enabled = adsk.core.BoolValueCommandInput.cast(
             inputs.itemById("add_insert_clearance")
@@ -1587,11 +1654,16 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
             action = "Existing faces and points will be reused."
         elif _auto_detect_insert_face_enabled(inputs):
             action = (
-                "Select one Screw Entry Face and points on that face; the Insert Entry "
-                "Face is detected within 0.2 mm."
+                "Select Locations first; the Screw Entry Face can be taken from their "
+                "sketch and the Insert Entry Face is detected within 0.2 mm."
+            )
+        elif _auto_fill_screw_face_enabled(inputs):
+            action = (
+                "Select Locations first; the Screw Entry Face is filled from their "
+                "sketch when it is based on a native face."
             )
         else:
-            action = "Select the two faces and points above."
+            action = "Select Locations and the two faces above, or choose a face manually."
         status.text = (
             "{} Insert Ø{:.3g} mm +{:.3g} mm tolerance x {:.3g} mm plus {:.3g} mm depth clearance; screw Ø{:.3g} mm; {} clearance Ø{:.3g} mm."
         ).format(
@@ -1632,6 +1704,29 @@ class ConnectionDialogInputHandler(adsk.core.InputChangedEventHandler):
     def notify(self, args):
         try:
             self.dialog_state["preview_error"] = None
+            if args.input.id == "screw_exit_face":
+                screw_face = adsk.core.SelectionCommandInput.cast(
+                    args.inputs.itemById("screw_exit_face")
+                )
+                auto_fill = adsk.core.BoolValueCommandInput.cast(
+                    args.inputs.itemById("auto_fill_screw_face")
+                )
+                if screw_face and screw_face.selectionCount == 0 and auto_fill:
+                    # Clearing the suggestion is the explicit gesture for switching
+                    # to a manual face, so do not immediately add it again.
+                    auto_fill.value = False
+            if args.input.id in ("locations", "auto_fill_screw_face"):
+                try:
+                    points = _selected_points(
+                        args.inputs, self.dialog_state.get("selection_cache")
+                    )
+                    _try_auto_fill_screw_face(
+                        args.inputs,
+                        points,
+                        self.dialog_state.get("selection_cache"),
+                    )
+                except ConnectionSetError:
+                    pass
             self.sync(
                 args.inputs,
                 load_record=args.input.id in ("dialog_mode", "connection_set"),
@@ -1876,7 +1971,7 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
             inputs.addTextBoxCommandInput(
                 "intro",
                 "",
-                "Create or edit a paired insert connection. Select native planar faces from bodies in one active component; occurrence/proxy faces are not supported. In automatic mode, select a Screw Entry Face and sketch points on that face; Fusion finds the opposing Insert Entry Face on another solid body within 0.2 mm. Disable automatic detection for manual two-face selection.",
+                "Create or edit a paired insert connection. In Create mode, select Locations first. The sketch hosting those points can fill the Screw Entry Face automatically; clear or disable that option to choose another native planar face manually. Fusion can also find the opposing Insert Entry Face on another solid body within 0.2 mm. Native faces from one active component are required; occurrence/proxy faces are not supported.",
                 4,
                 True,
             )
@@ -1905,6 +2000,28 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
             if not records_by_label:
                 set_dd.listItems.add("No managed Connection Sets found", True)
 
+            locations = inputs.addSelectionInput(
+                "locations",
+                "Locations",
+                "Select one or more SketchPoints on the face where the screw enters. The parent sketch can provide the Screw Entry Face automatically.",
+            )
+            locations.addSelectionFilter("SketchPoints")
+            locations.setSelectionLimits(1, 0)
+            auto_fill = inputs.addBoolValueInput(
+                "auto_fill_screw_face",
+                "Auto-fill Screw Entry Face from Sketch",
+                True,
+                "",
+                True,
+            )
+            auto_fill.isVisible = True
+            screw_face = inputs.addSelectionInput(
+                "screw_exit_face",
+                "Screw Entry Face",
+                "Automatically filled from the Locations sketch when possible. Clear it to disable the suggestion, or select the native planar face manually.",
+            )
+            screw_face.addSelectionFilter("PlanarFaces")
+            screw_face.setSelectionLimits(0, 1)
             auto_detect = inputs.addBoolValueInput(
                 "auto_detect_insert_face", "Auto-detect Insert Face", True, "", True
             )
@@ -1915,19 +2032,7 @@ class ConnectionDialogCreatedHandler(adsk.core.CommandCreatedEventHandler):
                 "Select the native planar insert entry face when automatic detection is disabled. Do not select a face through an occurrence/proxy.",
             )
             insert_face.addSelectionFilter("PlanarFaces")
-            insert_face.setSelectionLimits(1, 1)
-            screw_face = inputs.addSelectionInput(
-                "screw_exit_face",
-                "Screw Entry Face",
-                "Select the native planar face where the screw is inserted. In automatic mode, locations must be sketch points on this face. Do not select a face through an occurrence/proxy.",
-            )
-            screw_face.addSelectionFilter("PlanarFaces")
-            screw_face.setSelectionLimits(1, 1)
-            locations = inputs.addSelectionInput(
-                "locations", "Locations", "Select one or more sketch points."
-            )
-            locations.addSelectionFilter("SketchPoints")
-            locations.setSelectionLimits(1, 0)
+            insert_face.setSelectionLimits(0, 1)
 
             thread_dd = inputs.addDropDownCommandInput(
                 "thread_size", "Thread Size", adsk.core.DropDownStyles.TextListDropDownStyle

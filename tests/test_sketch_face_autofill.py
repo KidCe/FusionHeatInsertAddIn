@@ -1,0 +1,103 @@
+import importlib
+import sys
+import types
+import unittest
+
+
+class _Handler:
+    def __init__(self, *args, **kwargs):
+        pass
+
+
+class _Face:
+    objectType = "adsk::fusion::BRepFace"
+    assemblyContext = None
+
+
+class _ConstructionPlane:
+    objectType = "adsk::fusion::ConstructionPlane"
+
+
+class _Sketch:
+    def __init__(self, reference):
+        self.referencePlane = reference
+
+
+class _Point:
+    def __init__(self, sketch):
+        self.parentSketch = sketch
+
+
+class SketchFaceAutofillTests(unittest.TestCase):
+    def setUp(self):
+        adsk = types.ModuleType("adsk")
+        core = types.ModuleType("adsk.core")
+        fusion = types.ModuleType("adsk.fusion")
+        core.CommandEventHandler = _Handler
+        core.InputChangedEventHandler = _Handler
+        core.CommandCreatedEventHandler = _Handler
+        core.BoolValueCommandInput = types.SimpleNamespace(cast=lambda value: value)
+        core.SelectionCommandInput = types.SimpleNamespace(cast=lambda value: value)
+        fusion.BRepFace = types.SimpleNamespace(
+            cast=lambda value: value if isinstance(value, _Face) else None
+        )
+        fusion.SketchPoint = types.SimpleNamespace(
+            cast=lambda value: value if isinstance(value, _Point) else None
+        )
+        adsk.core = core
+        adsk.fusion = fusion
+        self.old_modules = {
+            name: sys.modules.get(name) for name in ("adsk", "adsk.core", "adsk.fusion")
+        }
+        sys.modules.update({"adsk": adsk, "adsk.core": core, "adsk.fusion": fusion})
+        sys.modules.pop("FusionHeatInsertAddIn", None)
+        self.module = importlib.import_module("FusionHeatInsertAddIn")
+
+    def tearDown(self):
+        sys.modules.pop("FusionHeatInsertAddIn", None)
+        for name, previous in self.old_modules.items():
+            if previous is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
+
+    def test_native_planar_reference_face_is_used(self):
+        face = _Face()
+        point = _Point(_Sketch(face))
+
+        self.assertIs(self.module._screw_face_from_locations([point]), face)
+
+    def test_construction_plane_requires_manual_face_selection(self):
+        point = _Point(_Sketch(_ConstructionPlane()))
+
+        self.assertIsNone(self.module._screw_face_from_locations([point]))
+
+    def test_auto_fill_adds_the_suggested_face_only_when_the_field_is_empty(self):
+        class _Bool:
+            value = True
+
+        class _Selection:
+            selectionCount = 0
+
+            def addSelection(self, face):
+                self.face = face
+                self.selectionCount = 1
+
+        face = _Face()
+        inputs_by_id = {
+            "auto_fill_screw_face": _Bool(),
+            "screw_exit_face": _Selection(),
+        }
+        inputs = types.SimpleNamespace(itemById=lambda input_id: inputs_by_id[input_id])
+
+        self.assertTrue(
+            self.module._try_auto_fill_screw_face(inputs, [_Point(_Sketch(face))])
+        )
+        self.assertIs(inputs_by_id["screw_exit_face"].face, face)
+        self.assertFalse(
+            self.module._try_auto_fill_screw_face(inputs, [_Point(_Sketch(_Face()))])
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

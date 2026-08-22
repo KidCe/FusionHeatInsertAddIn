@@ -7,7 +7,7 @@ need to be joined with a screw and a brass heat-set insert.
 ## See it first
 
 > 🎬 **Demo placeholder** — Add a short GIF or 30–60 second screen recording
-> here showing: select a Screw Entry Face → pick sketch points → choose the
+> here showing: pick sketch points → let the sketch fill the Screw Entry Face → choose the
 > insert profile → preview → create.
 >
 > Suggested file: `docs/demo.gif` or a short linked YouTube/Loom video.
@@ -31,7 +31,8 @@ matching opposing planar face when the geometry is unambiguous.
 1. Install the add-in with **Install Fusion Add-in.cmd**. The repository stays
    outside Fusion so it remains easy to update.
 2. In Fusion, open **Solid > Create > Insert Connection**.
-3. Select the Screw Entry Face and sketch points, choose matching insert and
+3. Select the sketch points first. The sketch automatically fills the Screw Entry
+   Face when it is based on a native planar face. Then choose matching insert and
    screw profiles, set the optional hole tolerance, preview, and create.
 
 The default workflow is intentionally short. Detailed manual selection,
@@ -56,18 +57,22 @@ Open **Solid > Create > Insert Connection**. The **Action** dropdown switches th
 
 For the default **Create New** workflow, create a sketch on the face where the screw is inserted, add the connection points there, and select:
 
-- **Screw Entry Face**: the planar face on the screw-side body;
-- **Locations**: one or more sketch points on that face.
+- **Locations**: one or more sketch points on that face. This comes first;
+- **Auto-fill Screw Entry Face from Sketch**: enabled by default. The face hosting
+  the sketch is suggested automatically when Fusion exposes it as a native planar
+  face;
+- **Screw Entry Face**: review the suggestion. Clear it to turn off the suggestion
+  for this dialog, then select another matching planar face manually.
 
 With **Auto-detect Insert Face** enabled, Fusion finds the opposing planar face on another solid body in the same component. The candidate must face the Screw Entry Face, cover every selected location, and be no more than **0.2 mm** away. If multiple candidates are equally close or no unique candidate is found, the command stops safely and explains how to switch to manual selection.
 
-Disable **Auto-detect Insert Face** when the geometry is unusual or ambiguous. The manual fallback then exposes the original two-face workflow: select **Insert Entry Face** and **Screw Entry Face** explicitly.
+Disable **Auto-detect Insert Face** when the geometry is unusual or ambiguous. The manual fallback then exposes the original two-face workflow: select **Insert Entry Face** and **Screw Entry Face** explicitly. The location points must still lie on the selected Screw Entry Face.
 
 For Create New, select:
 
 - **Insert Entry Face**: the outside face where the insert is installed;
 - **Screw Entry Face**: the face where the screw leaves the screw-side body and continues toward the insert body; and
-- **Locations**: one or more sketch points defining the connection axes.
+- **Locations**: one or more sketch points defining the connection axes. In the normal workflow this is the sketch-host face used above.
 
 For Edit Existing, select the managed Connection Set and change its Thread Size, Insert Profile, Insert Hole Diameter Tolerance, Screw Profile, Head Shape, Head Seat Distance, or Additional Insert Clearance Depth. The original faces and points are reused.
 
